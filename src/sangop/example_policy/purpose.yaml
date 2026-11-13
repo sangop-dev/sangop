@@ -1,0 +1,14 @@
+# EXAMPLE ONLY. Not legal advice. Your real purposes come from your own privacy notice.
+schema_version: 1
+disclaimer: >-
+  EXAMPLE ONLY. This file is an engineering aid and is not legal advice. The two purposes
+  below are made-up examples to show the format; replace them with your own.
+default: deny           # a purpose that is not listed may see no personal data at all
+illustrative: true      # must stay true
+purposes:
+  customer_support:
+    description: Example purpose. Answer a customer's question about their own order.
+    allowed_kinds: [EMAIL, PHONE_IN]
+  developer_debugging:
+    description: Example purpose. An engineer or AI agent investigates an error; no personal data needed.
+    allowed_kinds: []

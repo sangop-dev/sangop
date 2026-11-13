@@ -1,0 +1,9 @@
+{
+  "_comment": "EXAMPLE ONLY with placeholder paths. Replace <PATH-TO-PYTHON> and <PATH-TO-SANGOP> yourself. We have not tested this file with every MCP host; check your host's documentation for where its config lives.",
+  "mcpServers": {
+    "sangop-quickstart": {
+      "command": "<PATH-TO-PYTHON>",
+      "args": ["<PATH-TO-SANGOP>/examples/quickstart/server.py", "enforce"]
+    }
+  }
+}

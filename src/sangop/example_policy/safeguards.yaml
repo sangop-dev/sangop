@@ -1,0 +1,25 @@
+# EXAMPLE ONLY. Not legal advice. "provided"/"partial" describe what the SOFTWARE does,
+# never whether you comply with any law.
+schema_version: 1
+disclaimer: >-
+  EXAMPLE ONLY. This mapping is an engineering aid and is not legal advice. It shows the format
+  with three entries. Using it does not make anyone compliant. Read the official rule text.
+safeguards:
+  - id: example-masking
+    reference: DPDP Rules 2025, rule 6(1)(a) (example pointer)
+    requirement: Techniques such as masking or virtual tokens for personal data.
+    sangop_features: [tokenizer (virtual tokens), masking and redaction modes]
+    status: partial
+    limits: Only text that passes through a guarded tool is covered; data at rest is not encrypted by Sangop.
+  - id: example-logs
+    reference: DPDP Rules 2025, rules 6(1)(e) and 8(3) (example pointer)
+    requirement: Keep certain logs for at least one year.
+    sangop_features: [audit ledger (hash-chained, tamper-evident)]
+    status: partial
+    limits: Sangop makes tampering visible; you must store, back up and retain the log file yourself.
+  - id: example-breach-notice
+    reference: DPDP Rules 2025, rule 7 (example pointer)
+    requirement: Inform affected persons and the Board about a personal data breach.
+    sangop_features: []
+    status: not_provided
+    limits: Sangop does not detect breaches or send notices. This is outside its scope.

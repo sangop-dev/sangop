@@ -1,0 +1,10 @@
+# Once a week, opens pull requests for newer versions of the Python dependencies in pyproject.toml.
+# Nothing is merged automatically; every update goes through CI and a maintainer's review.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]

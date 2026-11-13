@@ -1,0 +1,41 @@
+# Runs the test suite, the self-test and the pre-publish check on every push to main and on every pull request,
+# on Linux and Windows with Python 3.10 to 3.13 (Windows added 13 Nov 2026 after the first Windows run found four
+# test/tooling gaps; see CHANGELOG). It uses no secrets and no network service except the package index.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Tests (the machine-dependent timing tests marked "slow" are skipped by default)
+        run: python -m pytest -q
+      - name: Self-test
+        run: sangop selftest
+      - name: Pre-publish check
+        run: python scripts/prepublish_check.py

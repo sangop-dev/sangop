@@ -1,0 +1,17 @@
+# EXAMPLE ONLY. Not legal advice. Shipped so developers can try the policy loader.
+# The complete, maintained DPDP policy pack is a separate (closed) Sangop Pro asset.
+schema_version: 1
+pack: example
+version: "0.1"
+disclaimer: >-
+  EXAMPLE ONLY. This file is an engineering aid and is not legal advice. It does not
+  guarantee compliance with any law. Ask a qualified lawyer what retention applies to you.
+reference: >-
+  Example reference: Digital Personal Data Protection Rules, 2025, rules 6(1)(e) and 8(3)
+  (a one-year minimum for certain logs, unless another law says otherwise). Read the official
+  text; this line is a pointer, not an interpretation.
+statutory_minimum_days: 365
+audit_log_retention_days: 365
+notes: >-
+  Change audit_log_retention_days to the value your lawyer gives you. The loader refuses
+  anything below 365.
