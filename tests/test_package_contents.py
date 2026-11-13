@@ -10,12 +10,21 @@ import pytest
 pytest.importorskip("hatchling")
 ROOT = Path(__file__).resolve().parent.parent
 
-FORBIDDEN = ("_HI.md", "policies/", "private/", ".jsonl", ".env", ".db", "TRADEMARK", "INVENTION", "DOMAIN_BRAND")
-PUBLIC_POLICY = "TRADEMARKS.md"      # the public trademark policy at the top level is allowed (14 Nov 2026)
+# General patterns only: this public file must not list the names of internal documents (14 Nov 2026, L4).
+FORBIDDEN = ("_HI.md", "private/", ".jsonl", "pro_markers", "private_strings", ".env", ".db")
+
+
+# The maintainers' private repository also holds the tools that check a public tree. A package built there is never
+# published (PyPI releases are built only by the public repository's CI, whose release check refuses these files), so
+# there, and only there, those tool files are expected; everything else above is still refused.
+IS_PRIVATE_REPO = (ROOT / "scripts" / "private_checks.py").is_file()
+PRIVATE_TOOLS = ("scripts/private_", "scripts/pro_markers")
 
 
 def _forbidden(name: str) -> bool:
-    return name != PUBLIC_POLICY and any(f in name for f in FORBIDDEN)
+    if IS_PRIVATE_REPO and name.startswith(PRIVATE_TOOLS):
+        return False
+    return any(f in name for f in FORBIDDEN)
 
 
 @pytest.fixture(scope="module")

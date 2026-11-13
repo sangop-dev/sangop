@@ -48,7 +48,7 @@ def test_clean_tree_passes(tmp_path):
 
 
 def test_ignored_internal_files_are_not_flagged(tmp_path):
-    res = pc.run_checks(make(tmp_path, {"docs/DECISIONS_HI.md": "internal", "policies/dpdp/a.yaml": "x", "dataset_v0_1.jsonl": "{}"}))
+    res = pc.run_checks(make(tmp_path, {"docs/NOTES_HI.md": "internal", "policies/dpdp/a.yaml": "x", "dataset_v0_1.jsonl": "{}"}))
     assert status(res, "private/internal files") == "PASS"
 
 
@@ -194,7 +194,7 @@ def test_published_sha256_of_private_sets_are_allowed(tmp_path):
     assert status(res, "Pro rules / private benchmark") == "PASS"
 
 
-# ---- LEGAL_SAFETY rule 3 on every public sentence, also for Sangop Pro (D-103, 5 Nov 2026) ----
+# ---- the honesty rule on every public sentence, also for Sangop Pro (D-103, 5 Nov 2026) ----
 
 @pytest.mark.parametrize("line", [
     "Sangop Pro catches everything.", "It stops all leaks.", "Hack-proof by design.", "The only tool you need.",

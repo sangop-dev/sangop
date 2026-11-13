@@ -1,11 +1,14 @@
 """SQL AST guard built on sqlglot.
 
-Fail-closed: anything that cannot be parsed, or contains more than one
-statement, is blocked. Regex is never used to judge SQL safety.
+Fail-closed: anything that cannot be parsed, contains more than one statement, or makes the guard itself fail
+(very deep nesting, an unexpected error) is blocked. A regular expression is used in exactly one place, and only to
+BLOCK, never to allow: MySQL/MariaDB executable comments (``/*! ... */``, ``/*M! ... */``), whose text those
+databases run but sqlglot drops as a comment (internal review 14 Nov 2026, H1). Everything else is judged on the AST.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import FrozenSet, Optional
 
@@ -41,6 +44,14 @@ DEFAULT_DENIED_FUNCTIONS = frozenset({
     # configuration / credential reads (re-audit R3)
     "current_setting", "pg_current_logfile", "pg_conf_load_time", "pg_show_all_settings",
     "pg_show_all_file_settings", "pg_get_functiondef",
+    # run a table, schema, database, cursor or a query given as TEXT, so the table checks never see it (14 Nov 2026, H3)
+    "table_to_xml_and_xmlschema", "schema_to_xml_and_xmlschema", "database_to_xml_and_xmlschema",
+    "table_to_xmlschema", "schema_to_xmlschema", "database_to_xmlschema", "query_to_xmlschema",
+    "cursor_to_xmlschema", "ts_rewrite", "ts_stat",
+    # Oracle packages that run a query given as text (14 Nov 2026, M1); package names are matched too, see below
+    "dbms_xmlgen", "dbms_xmlquery",
+    # side effects outside the query: notifications, statistics reset (14 Nov 2026, L2)
+    "pg_notify", "pg_stat_statements_reset",
 })
 
 # System catalogs that expose server configuration or credentials (re-audit R3). Matched on the bare table name,
@@ -55,7 +66,30 @@ CONCAT_AGGREGATES = frozenset({
     "string_agg", "group_concat", "listagg", "json_agg", "jsonb_agg", "json_object_agg", "jsonb_object_agg",
     "json_group_array", "json_group_object", "array_agg", "xmlagg", "collect_list", "collect_set", "list",
     "array_concat_agg", "string_agg_distinct", "wm_concat", "json_arrayagg", "json_objectagg", "any_value_list",
+    # PostgreSQL variants that were missing (14 Nov 2026, H2)
+    "json_agg_strict", "jsonb_agg_strict", "json_object_agg_strict", "jsonb_object_agg_strict",
+    "json_object_agg_unique", "jsonb_object_agg_unique", "json_object_agg_unique_strict",
+    "jsonb_object_agg_unique_strict", "range_agg", "range_intersect_agg",
+    # Oracle COLLECT, DuckDB histogram (14 Nov 2026, M1)
+    "collect", "histogram",
 })
+
+
+def _is_folding_name(name: str) -> bool:
+    """Fail-closed naming rule (14 Nov 2026, H2): a function whose name ends in "agg" or contains "_agg" is treated as
+    row-folding, listed or not. "avg" does not match."""
+    return name.endswith("agg") or "_agg" in name
+
+
+# MySQL / MariaDB executable comments: the server runs their text (14 Nov 2026, H1). Checked on the raw SQL text,
+# before parsing, in every dialect; the marker inside a string literal is blocked too (accepted, fail-closed).
+_EXECUTABLE_COMMENT = re.compile(r"/\*[Mm]?!")
+
+# T-SQL table hints that take or keep locks (14 Nov 2026, L2)
+_LOCKING_TABLE_HINTS = frozenset({"UPDLOCK", "XLOCK", "HOLDLOCK", "TABLOCKX"})
+
+# A table "name" with one of these characters is a file path or URL (DuckDB: SELECT * FROM '/etc/passwd') (M1)
+_PATH_CHARS = frozenset("/\\.:*?~")
 
 _STRUCTURAL_FUNCS = ("Cast", "TryCast", "Paren")
 
@@ -115,6 +149,20 @@ def _func_name(node: exp.Expression) -> str:
         return node.sql_name().lower()
     except Exception:  # pragma: no cover - defensive
         return type(node).__name__.lower()
+
+
+def _function_qualifiers(stmt: exp.Expression) -> set:
+    """Package / schema names written in front of a function call: ``UTL_HTTP.request(...)`` gives {"utl_http"}.
+
+    sqlglot keeps such a call as Dot(qualifier, function); the guard checked just the function's own name, so a
+    denied PACKAGE slipped through (found while fixing M1, 14 Nov 2026). Used for the deny list, not the allow-list."""
+    names = set()
+    for node in stmt.find_all(exp.Func):
+        parent = node.parent
+        if isinstance(parent, exp.Dot) and parent.expression is node:
+            for part in parent.this.find_all(exp.Identifier):
+                names.add(str(part.this).lower())
+    return names
 
 
 def _function_names(stmt: exp.Expression) -> set:
@@ -251,6 +299,16 @@ def _entry_matches(entry: str, ref: tuple, dialect: Optional[str], bare_any: boo
 
 
 def check_sql(sql: str, policy: SqlPolicy = SqlPolicy()) -> SqlVerdict:
+    """Judge one SQL statement against ``policy``. Never raises: any failure inside the guard is a block (L1)."""
+    try:
+        return _check_sql(sql, policy)
+    except Exception:            # RecursionError on very deep nesting, MemoryError, or anything unexpected
+        return SqlVerdict(False, "query too complex (blocked, fail-closed)", sql)
+
+
+def _check_sql(sql: str, policy: SqlPolicy) -> SqlVerdict:
+    if _EXECUTABLE_COMMENT.search(sql):
+        return SqlVerdict(False, "MySQL/MariaDB executable comment /*! */ blocked (fail-closed)", sql)
     try:
         statements = [s for s in sqlglot.parse(sql, read=policy.dialect) if s is not None]
     except ParseError as e:
@@ -269,9 +327,24 @@ def check_sql(sql: str, policy: SqlPolicy = SqlPolicy()) -> SqlVerdict:
             return SqlVerdict(False, f"only SELECT is allowed in read-only mode (got {stype})", sql, stype)
         if stmt.find(exp.Lock) is not None:
             return SqlVerdict(False, "row-locking SELECT (FOR UPDATE/SHARE) blocked by read-only policy", sql, stype)
+        hint_cls = getattr(exp, "WithTableHint", None)
+        if hint_cls is not None:
+            for hint in stmt.find_all(hint_cls):
+                locking = sorted({h.name.upper() for h in hint.expressions} & _LOCKING_TABLE_HINTS)
+                if locking:
+                    return SqlVerdict(False, f"row-locking table hint blocked by read-only policy: {', '.join(locking)}",
+                                      sql, stype)
 
     funcs = _function_names(stmt)
     bad_agg = funcs & CONCAT_AGGREGATES
+    if not bad_agg:
+        bad_agg = {n for n in funcs if _is_folding_name(n)}
+    if not bad_agg:
+        # T-SQL FOR JSON / FOR XML turn a whole result into one value (14 Nov 2026, M1)
+        for select in stmt.find_all(exp.Select):
+            if select.args.get("for_") or select.args.get("for"):
+                bad_agg = {"for json/xml"}
+                break
     if not bad_agg:
         for node in stmt.find_all(exp.AggFunc):
             cname = type(node).__name__.lower()
@@ -288,7 +361,8 @@ def check_sql(sql: str, policy: SqlPolicy = SqlPolicy()) -> SqlVerdict:
     if bad_agg:
         return SqlVerdict(False, f"row-folding aggregate blocked (bulk extraction guard): {', '.join(sorted(bad_agg))}",
                           sql, stype)
-    denied_f = funcs & (DEFAULT_DENIED_FUNCTIONS | {f.lower() for f in policy.extra_denied_functions})
+    denied_f = (funcs | _function_qualifiers(stmt)) & (DEFAULT_DENIED_FUNCTIONS
+                                                       | {f.lower() for f in policy.extra_denied_functions})
     if denied_f:
         return SqlVerdict(False, f"denied function(s): {', '.join(sorted(denied_f))}", sql, stype)
     if policy.allowed_functions is not None:
@@ -306,6 +380,8 @@ def check_sql(sql: str, policy: SqlPolicy = SqlPolicy()) -> SqlVerdict:
     ctes = {c.alias.lower() for c in stmt.find_all(exp.CTE) if c.alias}
     refs = []                                   # (catalog, schema, name) of every real table, lower case
     for t in stmt.find_all(exp.Table):
+        if isinstance(t.this, exp.Identifier) and set(t.name) & _PATH_CHARS:
+            return SqlVerdict(False, f"file path used as a table blocked: {t.name!r}", sql, stype)
         ref = ((t.catalog or "").lower(), (t.db or "").lower(), t.name.lower())
         if not ref[0] and not ref[1] and ref[2] in ctes:
             continue                            # a CTE name, not a table

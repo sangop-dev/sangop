@@ -1,6 +1,6 @@
 """Deterministic detectors for Indian + global PII and secrets (open core).
 
-Design rules (see docs/LEGAL_SAFETY_HI.md):
+Design rules (see README, Known limits):
 - Pure Python, no network, no ML model in the hot path.
 - Structured identifiers are validated with checksums where one exists
   (Aadhaar -> Verhoeff, GSTIN -> base-36 check char, cards -> Luhn) to keep

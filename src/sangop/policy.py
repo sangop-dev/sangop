@@ -30,7 +30,7 @@ class PolicyError(ValueError):
     """The policy pack is invalid. Never continue as if it were valid."""
 
 
-# Phrases a pack may not contain: they would be false claims (docs/LEGAL_SAFETY_HI.md).
+# Phrases a pack may not contain: they would be false claims (see README, Known limits).
 FORBIDDEN_CLAIMS = (  # prepublish-allow
     "dpdp compliant", "fully compliant",  # prepublish-allow
     "100% secure", "100% safe",  # prepublish-allow

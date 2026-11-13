@@ -48,7 +48,7 @@ def test_readme_names_both_versions():
 
 
 def test_readme_never_suggests_pro_can_be_obtained_today():
-    """LEGAL_SAFETY rule 3 (honesty): every README paragraph that names Sangop Pro's extra coverage says it is not
+    """Honesty rule: every README paragraph that names Sangop Pro's extra coverage says it is not
     publicly available yet."""
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     for para in text.split("\n\n"):

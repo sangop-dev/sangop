@@ -426,6 +426,7 @@ the tests and the speed benchmark are all here. Run them, and try to break it ([
 - **Rules plugins can change detection.** Any installed package that registers a `sangop.plugins` entry point can
   replace the active rule set, including with weaker rules. Install only plugins you trust (as with any Python
   package) and check `sangop selftest`, which prints the active rule set (`"rules": "basic"` without a plugin).
+- The SQL guard is deny-list based for functions; MySQL/MariaDB executable comments (/*! */) are blocked outright. Database-user permissions remain the primary defence (see Security model).
 - SQL checks assume the right `dialect` is set in `SqlPolicy`; a statement the chosen dialect cannot parse is
   blocked, one it parses differently from your database may not be judged as your database reads it.
 - Joins: with `require_filter_column`, every directly joined table needs its own qualified filter

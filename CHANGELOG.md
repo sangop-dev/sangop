@@ -39,6 +39,7 @@ What the open core does today:
   28.4.0, the bulk-extraction check missed a Postgres `json_agg` with a `LIMIT`; from 28.5.0 the whole test suite
   passes. **httpx added to the `dev` extra** so the MCP compatibility tests run on a clean install.
 - **Tests:** regression tests for row-folding aggregates with LIMIT (Postgres `json_agg` / `jsonb_agg`).
+- SQL guard: blocks MySQL/MariaDB executable comments and more row-folding and table-dumping functions (internal AI-assisted review, 14 Nov 2026).
 - **Windows:** the first full test run on Windows found two gaps in the open core's tests (none in the library): the
   test that keeps the examples offline also blocked the loopback connection that every asyncio event loop makes on
   Windows, and the HTTP compatibility test sent its helper server's output to a pipe nobody read, so the server
