@@ -70,6 +70,20 @@ DEFAULT_DENIED_FUNCTIONS = frozenset({
     "cron", "aws_s3", "net", "http", "http_get", "http_post",
     # SQLite extensions that read files, archives or CSV (14 Nov 2026, G2)
     "fsdir", "zipfile", "csv", "lsmode",
+    # PostgreSQL contrib functions that run a query or a table given as text (review 3, 14 Nov 2026, N1); see also
+    # the crosstab* family rule below
+    "crosstab", "crosstab2", "crosstab3", "crosstab4", "crosstab_hash", "connectby", "xpath_table", "xslt_process",
+    # DuckDB serialized-SQL execution (review 3, N2); see also the *execute* / *serialize* rule below
+    "json_execute_serialized_sql", "json_serialize_sql", "json_deserialize_sql", "json_serialize_plan",
+    # PostgreSQL page inspection and index maintenance (review 3, M2)
+    "get_raw_page", "bt_page_items", "bt_metap", "heap_page_items", "page_header", "pgstattuple",
+    "pgstattuple_approx", "pgstatindex", "pgrowlocks", "brin_summarize_new_values", "brin_summarize_range",
+    "brin_desummarize_range", "gin_clean_pending_list",
+    # T-SQL: other sessions' SQL text, as a table-valued function (review 3, M3; also a denied table)
+    "dm_exec_sql_text",
+    # DuckDB secrets and settings (review 3, L1); MySQL replication waits (review 3, L2)
+    "duckdb_secrets", "duckdb_settings", "which_secret",
+    "source_pos_wait", "wait_for_executed_gtid_set", "wait_until_sql_thread_after_gtids",
 })
 
 # System catalogs that expose server configuration or credentials (re-audit R3). Matched on the bare table name,
@@ -79,6 +93,11 @@ DEFAULT_DENIED_TABLES = frozenset({
     "pg_user_mappings", "pg_stat_activity",
     "user_mapping_options",                           # shows foreign-server passwords (internal review 2, 14 Nov 2026, M3)
     "pg_stat_statements", "pg_stat_statements_info",  # other sessions' query texts (14 Nov 2026, D-115)
+    # MySQL / SQL Server views with other sessions' SQL text or credentials (review 3, 14 Nov 2026, M3).
+    # "user" only as mysql.user: a bare "user" is a common application table name.
+    "processlist", "events_statements_current", "events_statements_history", "events_statements_history_long",
+    "statement_analysis", "mysql.user", "sql_logins", "sysxlogins", "dm_exec_sql_text", "dm_exec_requests",
+    "dm_exec_sessions",
 })
 
 # Whole-family rules (14 Nov 2026, D-115). In PostgreSQL (and the generic reading, dialect=None) every function whose
@@ -97,7 +116,11 @@ SQLITE_SCHEMA_PRAGMAS = frozenset({"pragma_table_info", "pragma_table_xinfo", "p
                                    "pragma_foreign_key_list"})
 SQLITE_DENIED_TABLES = frozenset({"dbstat"})
 # PostgreSQL extension families (14 Nov 2026, G4): postgres_fdw*, http, http_*
-PG_EXTENSION_FAMILIES = ("postgres_fdw", "http_")
+PG_EXTENSION_FAMILIES = ("postgres_fdw", "http_", "crosstab")      # crosstab*: review 3, N1
+# The PostgreSQL rules apply to these dialects; the "--" rule to the MySQL-family ones ("" = dialect None)
+# (review 3, 14 Nov 2026, M1).
+PG_LIKE_DIALECTS = ("", "postgres", "postgresql", "redshift", "materialize", "risingwave")
+MYSQL_LIKE_DIALECTS = ("", "mysql", "doris", "starrocks", "singlestore")
 
 # Aggregates that fold many rows into ONE value: they would defeat the row-count (LIMIT) guard (audit finding H4).
 CONCAT_AGGREGATES = frozenset({
@@ -126,6 +149,7 @@ def _is_folding_attribute(name: str) -> bool:
 
 _TOP_N_CLASSES = ("Max", "Min")                  # DuckDB max(x, n) / min(x, n): the n largest values (review 2, H5)
 _ARG_CLASSES = ("ArgMax", "ArgMin")              # arg_max / max_by (x, y, n)
+_ARG_NULL_NAMES = frozenset({"arg_max_null", "arg_min_null"})   # DuckDB, sqlglot keeps them as Anonymous
 _MULTI_QUANTILE_CLASSES = ("PercentileDisc", "PercentileCont", "Quantile", "ApproxQuantile")
 
 
@@ -138,6 +162,9 @@ def _top_n_or_multi_value(stmt: exp.Expression) -> set:
             found.add(f"{cls.lower()}(x, n)")
         elif cls in _ARG_CLASSES and node.args.get("count"):
             found.add(f"{_func_name(node)}(x, y, n)")
+        elif (isinstance(node, exp.Anonymous) and _func_name(node) in _ARG_NULL_NAMES
+              and len(node.expressions) >= 3):                                     # 14 Nov 2026 follow-up
+            found.add(f"{_func_name(node)}(x, y, n)")
         elif cls in _MULTI_QUANTILE_CLASSES or (isinstance(node, exp.Anonymous)
                                                 and ("quantile" in _func_name(node) or "percentile" in _func_name(node))):
             for arg in node.iter_expressions():
@@ -145,6 +172,106 @@ def _top_n_or_multi_value(stmt: exp.Expression) -> set:
                     found.add(f"{_func_name(node)}(array)")
                     break
     return found
+
+
+# Common string / date functions that never run a text argument as a query: plain text in their arguments is not
+# refused by the text-query rule (14 Nov 2026, D-117). Matched by the name as written (unknown functions) and by the
+# node sqlglot builds for it (it turns many of them into typed nodes: ifnull/nvl -> Coalesce, instr -> StrPosition).
+# A function nested inside one of these is still checked on its own.
+SAFE_TEXT_ARG_FUNCTIONS = frozenset({
+    "coalesce", "nullif", "greatest", "least", "concat", "concat_ws", "replace", "translate", "lower", "upper",
+    "initcap", "trim", "btrim", "ltrim", "rtrim", "substring", "substr", "left", "right", "position", "strpos", "instr",
+    "split_part", "starts_with", "length", "char_length", "octet_length", "lpad", "rpad", "reverse", "md5", "encode",
+    "decode", "to_char", "to_date", "to_timestamp", "format_date", "strftime", "date", "datetime", "json_extract",
+    "json_extract_path_text", "jsonb_extract_path_text", "regexp_replace", "regexp_like", "like", "ilike", "ifnull",
+    "iif", "nvl", "nvl2", "case",
+    # second follow-up, 14 Nov 2026
+    "regexp_match", "regexp_matches", "regexp_split_to_array", "regexp_split_to_table", "regexp_count",
+    "regexp_instr", "regexp_substr", "regexp_extract", "similar_to", "to_number", "format",
+})
+_SAFE_TEXT_ARG_CLASSES = frozenset({
+    "coalesce", "nullif", "greatest", "least", "concat", "concatws", "replace", "translate", "lower", "upper",
+    "initcap", "trim", "substring", "left", "right", "strposition", "splitpart", "startswith", "length", "pad",
+    "reverse", "md5", "md5digest", "encode", "decode", "decodecase", "timetostr", "tochar", "strtodate",
+    "tsordstodate", "strtotime", "date", "datefromparts", "timestampfromparts", "jsonextract", "jsonextractscalar",
+    "regexpreplace", "regexplike", "if", "nvl2", "case",
+    "regexpcount", "regexpinstr", "regexpsubstr", "regexpextract", "tonumber", "format", "numbertostr",
+})
+# String nodes whose text is checked (D-117 follow-ups): quoted literals, and every other string-literal node sqlglot
+# has - RawString (PostgreSQL / DuckDB $$...$$, $tag$...$tag$), ByteString (E'...'), National (N'...'),
+# UnicodeString (U&'...'), HexString (X'...'), BitString (B'...') and any future non-function class whose name ends
+# in "String" - also behind CAST, TRY_CAST, :: or brackets. Hex and bit strings are decoded before the check.
+_STRING_NODES = tuple(c for c in (exp.RawString, getattr(exp, "National", None)) if c is not None)
+
+
+def _decoded(arg, text: str) -> str:
+    name = type(arg).__name__
+    try:
+        if name == "HexString":
+            return bytes.fromhex(text).decode("utf-8", "replace")
+        if name == "BitString" and text and len(text) % 8 == 0 and set(text) <= {"0", "1"}:
+            return bytes(int(text[i:i + 8], 2) for i in range(0, len(text), 8)).decode("utf-8", "replace")
+    except ValueError:
+        pass
+    return text
+
+
+def _argument_text(arg) -> Optional[str]:
+    while isinstance(arg, (exp.Cast, exp.TryCast, exp.Paren)):
+        arg = arg.this
+    if isinstance(arg, exp.Literal):
+        return str(arg.this) if arg.is_string else None
+    if (isinstance(arg, exp.Expression) and not isinstance(arg, exp.Func) and isinstance(arg.this, str)
+            and (isinstance(arg, _STRING_NODES) or type(arg).__name__.endswith("String"))):
+        return _decoded(arg, arg.this)
+    return None
+
+
+def _keeps_plain_text(node: exp.Func) -> bool:
+    if isinstance(node, exp.Anonymous):
+        return node.name.lower() in SAFE_TEXT_ARG_FUNCTIONS
+    if type(node).__name__.lower() in _SAFE_TEXT_ARG_CLASSES:
+        return True
+    return any(n.lower() in SAFE_TEXT_ARG_FUNCTIONS for n in type(node).sql_names())
+
+
+def _sql_text_arguments(stmt: exp.Expression) -> list:
+    """Names of functions (table-functions and unknown functions included) that get SQL text as a string argument.
+    Several database functions run such text as a query (crosstab, query_to_xml, ts_stat, dblink, DuckDB query,
+    json_serialize_sql, ...); new ones appear with new versions, so the shape is refused, fail-closed (D-117).
+    CAST / TRY_CAST are skipped: they convert a value and never run it (text behind one, passed on to another
+    function, is still checked)."""
+    found = []
+    for node in stmt.find_all(exp.Func):
+        if isinstance(node, (exp.Cast, exp.TryCast)) or _keeps_plain_text(node):
+            continue
+        for value in node.args.values():
+            for arg in (value if isinstance(value, list) else [value]):
+                text = _argument_text(arg)
+                if text is not None and _SQL_TEXT_ARGUMENT.match(text):
+                    found.append(node.name.lower() if isinstance(node, exp.Anonymous) else node.sql_name().lower())
+    return found
+
+
+def _has_dynamic_pivot(stmt: exp.Expression) -> bool:
+    """A PIVOT whose output columns come from the data folds a whole column into one row (review 3, N3): DuckDB
+    "ON col" without IN, Snowflake "IN (ANY ...)" or "IN (SELECT ...)". A PIVOT that lists its values as literals or
+    names (T-SQL "IN ([a],[b])", "IN ('a','b')") is allowed; UNPIVOT is allowed."""
+    for pivot in stmt.find_all(exp.Pivot):
+        if pivot.args.get("unpivot"):
+            continue
+        fields = pivot.args.get("fields") or pivot.expressions        # DuckDB keeps its ON part in expressions
+        if not fields:
+            return True
+        for field in fields:
+            if not isinstance(field, exp.In) or field.args.get("query") or not field.expressions:
+                return True
+            for value in field.expressions:
+                if isinstance(value, exp.Alias):
+                    value = value.this
+                if not isinstance(value, (exp.Literal, exp.Identifier, exp.Column)) or value.find(exp.Select):
+                    return True
+    return False
 
 
 def _folding_attributes(stmt: exp.Expression) -> set:
@@ -186,6 +313,10 @@ MAX_SQL_BYTES = 100 * 1024
 # following space is blocked for dialect=None and "mysql" (also used for MariaDB; founder's decision, 14 Nov 2026);
 # a nested comment for dialect=None.
 _DASH_DASH_NO_SPACE = re.compile(r"--(?=\S)")
+# A string argument that reads as SQL: a statement keyword as a whole word, then more text (D-117)
+_SQL_TEXT_ARGUMENT = re.compile(
+    r"^\s*\(*\s*(select|with|values|table|from|insert|update|delete|merge|copy|call|exec|pivot|unpivot)\s+\S",
+    re.IGNORECASE)
 
 # A table "name" with one of these characters is a file path or URL (DuckDB: SELECT * FROM '/etc/passwd') (M1)
 _PATH_CHARS = frozenset("/\\.:")   # "*", "?" and "~" removed: BigQuery wildcard tables `events_*` (review 2 false positive)
@@ -274,7 +405,9 @@ def _family_denied_functions(funcs: set, dialect: Optional[str]) -> set:
     found = set()
     if d in ("", "duckdb"):
         found |= {n for n in funcs if n.startswith("read_") or n.endswith("_scan")}
-    if d in ("", "postgres", "postgresql"):
+        found |= {n for n in funcs if "execute" in n or "serialize" in n}                       # review 3, N2
+        found |= {n for n in funcs if n == "getenv"}                                             # 14 Nov 2026 follow-up
+    if d in PG_LIKE_DIALECTS:
         found |= {n for n in funcs if n.startswith(PG_FUNCTION_FAMILIES) and n not in PG_HARMLESS_FUNCTIONS}
         found |= {n for n in funcs if n == "http" or n.startswith(PG_EXTENSION_FAMILIES)}         # G4
     if d in ("", "sqlite"):
@@ -289,7 +422,7 @@ def _family_denied_tables(refs: list, dialect: Optional[str]) -> set:
     found = set()
     for ref in refs:
         name = ref[2]
-        if d in ("", "postgres", "postgresql") and name.startswith("pg_") and name not in PG_SCHEMA_TABLES:
+        if d in PG_LIKE_DIALECTS and name.startswith("pg_") and name not in PG_SCHEMA_TABLES:
             found.add(".".join(x for x in ref if x))
         if d in ("", "sqlite") and name.startswith("sqlite_") and name not in SQLITE_SCHEMA_TABLES:
             found.add(".".join(x for x in ref if x))
@@ -459,7 +592,7 @@ def _check_sql(sql: str, policy: SqlPolicy) -> SqlVerdict:
         return SqlVerdict(False, "MySQL/MariaDB executable comment /*! */ blocked (fail-closed)", sql)
     if _UNICODE_ESCAPE.search(sql):
         return SqlVerdict(False, "unicode-escaped identifier/string blocked (fail-closed)", sql)
-    if (policy.dialect or "").lower() in ("", "mysql") and _DASH_DASH_NO_SPACE.search(sql):
+    if (policy.dialect or "").lower() in MYSQL_LIKE_DIALECTS and _DASH_DASH_NO_SPACE.search(sql):
         # MySQL/MariaDB read "--x" as minus-minus-x, not as a comment (founder's decision, 14 Nov 2026: mysql too)
         return SqlVerdict(False, "'--' without a following space is read differently by MySQL (blocked; set "
                                  "SqlPolicy(dialect=...) to your database)", sql)
@@ -513,6 +646,8 @@ def _check_sql(sql: str, policy: SqlPolicy) -> SqlVerdict:
             if select.args.get("for_") or select.args.get("for"):
                 bad_agg = {"for json/xml"}
                 break
+    if not bad_agg and _has_dynamic_pivot(stmt):
+        bad_agg = {"pivot (dynamic)"}
     if not bad_agg:
         for node in stmt.find_all(exp.AggFunc):
             cname = type(node).__name__.lower()
@@ -534,6 +669,10 @@ def _check_sql(sql: str, policy: SqlPolicy) -> SqlVerdict:
                 | _family_denied_functions(funcs, policy.dialect))
     if denied_f:
         return SqlVerdict(False, f"denied function(s): {', '.join(sorted(denied_f))}", sql, stype)
+    text_query = _sql_text_arguments(stmt)
+    if text_query:
+        return SqlVerdict(False, f"query given as text blocked (fail-closed): {', '.join(sorted(set(text_query)))}",
+                          sql, stype)
     if policy.allowed_functions is not None:
         allow = {f.lower() for f in policy.allowed_functions}
         extra = {n for n in funcs if n not in allow}

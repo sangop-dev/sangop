@@ -350,7 +350,8 @@ Tested in depth: PostgreSQL and SQLite. Experimental: MySQL/MariaDB, DuckDB, SQL
 Always set SqlPolicy(dialect=...) to the database you run; the default (None) is a generic reading and can differ from MySQL/SQLite on comments.
 For MariaDB use `dialect="mysql"`.
 
-For PostgreSQL and SQLite (and for the default `dialect=None`) whole families of system names are blocked, so a new
+For PostgreSQL and SQLite (and for the default `dialect=None`; the PostgreSQL rules also for `redshift`,
+`materialize` and `risingwave`) whole families of system names are blocked, so a new
 system function is refused before anyone lists it: functions starting with `pg_`, `lo_`, `txid_` or `dblink`, and
 tables starting with `pg_`, except `pg_typeof`, `pg_size_pretty`, `pg_column_size` and the schema tables `pg_tables`,
 `pg_views`, `pg_indexes`, `pg_class`, `pg_namespace`, `pg_attribute`, `pg_type` (and `information_schema`, except
@@ -358,15 +359,18 @@ tables starting with `pg_`, except `pg_typeof`, `pg_size_pretty`, `pg_column_siz
 `sqlite_compileoption_used` and the tables `sqlite_master`, `sqlite_schema`, `sqlite_temp_master` and
 `sqlite_temp_schema`; SQLite `pragma_` functions and tables, except `pragma_table_info`, `pragma_table_xinfo`,
 `pragma_index_list`, `pragma_index_info` and `pragma_foreign_key_list`, and the `dbstat` table. PostgreSQL also
-blocks functions starting with `postgres_fdw` or `http_`, and `http`. For DuckDB (and `dialect=None`), functions
-starting with `read_` or ending in `_scan` are blocked. A unicode-escaped name or string (`U&"..."`, `U&'...'`) is
+blocks functions starting with `postgres_fdw`, `http_` or `crosstab`, and `http`. For DuckDB (and `dialect=None`),
+functions starting with `read_`, ending in `_scan`, or with `execute` or `serialize` in the name are blocked. A PIVOT
+whose output columns come from the data (DuckDB `ON col` without `IN`, Snowflake `IN (ANY ...)` or `IN (SELECT ...)`)
+is blocked as row-folding; a PIVOT that lists its values is allowed. `--` without a following space is refused for
+`mysql`, `doris`, `starrocks`, `singlestore` and `dialect=None`. A unicode-escaped name or string (`U&"..."`, `U&'...'`) is
 blocked in every dialect.
 
 ### Who maintains it, and how
 
 Sangop is maintained by Arvind Kumar, an independent developer in Raipur, India, who decides what it does and
 signs off every release. Development uses AI coding assistants under fixed rules: every change starts with a
-failing test; the full suite (about 740 tests) runs on Linux and Windows before a release; a separate AI-assisted
+failing test; the full suite (about 1,500 tests) runs on Linux and Windows before a release; a separate AI-assisted
 security review attacks each release candidate, and every fixed finding gets a regression test. None of this is a
 third-party audit; one is planned before any enterprise offering. You don't have to take our word for it: the code,
 the tests and the speed benchmark are all here. Run them, and try to break it ([SECURITY.md](SECURITY.md)).
@@ -477,8 +481,10 @@ the tests and the speed benchmark are all here. Run them, and try to break it ([
   package) and check `sangop selftest`, which prints the active rule set (`"rules": "basic"` without a plugin).
 - The SQL guard does not stop a query that is merely heavy (for example `count(*)` over a cross join of five
   tables); set `statement_timeout`, `lock_timeout` and `idle_in_transaction_session_timeout` on the database user.
-- Wide self-joins or column pivots can still return many values per row within the LIMIT; keep allowed_tables narrow and database timeouts on.
+- Wide self-joins or pivots that list their values can still return many values per row within the LIMIT; keep allowed_tables narrow and database timeouts on.
 - The SQL guard is deny-list based for functions; MySQL/MariaDB executable comments (/*! */) are blocked outright. Database-user permissions remain the primary defence (see Security model).
+- Function arguments that look like SQL text (e.g. 'SELECT …') are refused, except as arguments of common string and date functions (coalesce, replace, concat, lower …), because several database functions run such text as a query.
+- Text assembled at run time (for example 'SEL' || 'ECT …' or concat(...)) is not recognised as a query; functions that run text are blocked by name, and database-user permissions remain the main defence.
 - SQL checks assume the right `dialect` is set in `SqlPolicy`; a statement the chosen dialect cannot parse is
   blocked, one it parses differently from your database may not be judged as your database reads it.
 - Joins: with `require_filter_column`, every directly joined table needs its own qualified filter
