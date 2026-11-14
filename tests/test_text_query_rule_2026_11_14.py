@@ -212,7 +212,8 @@ def test_followup3_string_like_nodes_are_refused_with_dialect_none(sql):
     "SELECT array_to_string(ARRAY['a', 'b'], ',') LIMIT 1",
 ])
 def test_followup3_ordinary_string_forms_stay_allowed(sql):
-    v = check_sql(sql, SqlPolicy(dialect="postgres"))
+    # unknownfn is named so that the default allow-list (15 Nov 2026, D-119) does not refuse it; the text rule is tested
+    v = check_sql(sql, SqlPolicy(dialect="postgres", extra_allowed_functions=frozenset({"unknownfn"})))
     assert v.allowed is True, v.reason
 
 

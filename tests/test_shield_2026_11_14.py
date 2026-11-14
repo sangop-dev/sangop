@@ -160,7 +160,10 @@ def test_m1_denied_oracle_packages_are_caught_in_package_function_form(sql):
 
 
 def test_m1_an_ordinary_qualified_function_stays_allowed():
-    v = check_sql("SELECT myschema.my_fn(id) FROM orders LIMIT 1", SqlPolicy(dialect="postgres"))
+    # Since the default allow-list (15 Nov 2026, D-119) the user names the function; the package/schema check of
+    # this test must still not refuse it.
+    v = check_sql("SELECT myschema.my_fn(id) FROM orders LIMIT 1",
+                  SqlPolicy(dialect="postgres", extra_allowed_functions=frozenset({"myschema.my_fn"})))
     assert v.allowed is True, v.reason
 
 

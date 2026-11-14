@@ -297,9 +297,10 @@ Measured on a synthetic dataset authored by this project; real-world results wil
 Sangop is a **second layer**, not the first. The real defence for your database is its own **read-only database
 user**, restricted to the tables, schemas and rows that the agent may see (row-level security, a separate
 read replica, no file/extension privileges). The SQL guard is a deterministic check in front of that user: it
-catches the common mistakes and the obvious attacks, but a deny-list of SQL functions can never be complete and SQL
-dialects differ. Use `SqlPolicy(allowed_functions=...)` for a strict allow-list, give the agent's database
-account no more rights than it needs, and treat a guard bypass as a bug to report (see `SECURITY.md`).
+catches the common mistakes and the obvious attacks. For PostgreSQL and SQLite it accepts only functions on a
+default allow-list (see "Function allow-list" below); for the other dialects it uses a deny-list of functions, which
+can never be complete, and SQL dialects differ. Give the agent's database account no more rights than it needs, and
+treat a guard bypass as a bug to report (see `SECURITY.md`).
 
 SELECT-only grants are not enough: also set default_transaction_read_only = on for the agent's database user (PostgreSQL lets every role create large objects).
 
@@ -343,15 +344,49 @@ SQLite:
 - `conn.enable_load_extension(False)` where your Python build has it; in Python's `sqlite3` loading extensions is
   already off by default.
 
+### Function allow-list (default for PostgreSQL and SQLite)
+
+With `dialect` set to `postgres`, `redshift`, `materialize`, `risingwave` or `sqlite`, or left as `None`, the SQL
+guard accepts only functions on a default allow-list: common aggregates (`count`, `sum`, `avg`, `min`, `max`,
+`stddev`, `percentile_cont`, ...), window functions (`row_number`, `rank`, `lag`, `lead`, ...), conditionals
+(`coalesce`, `nullif`, `greatest`, `least`), math, strings (`lower`, `trim`, `substring`, `replace`,
+`regexp_replace`, ...), date and time (`now`, `date_trunc`, `extract`, `to_char`, `strftime`, ...) and functions that
+read JSON values, plus syntax such as CAST, CASE, EXTRACT, INTERVAL, LIKE, IN and BETWEEN.
+`sangop.sqlguard.default_allowed_functions("postgres")` returns the full list. Any other function is refused, and the
+message names it:
+
+```text
+function 'my_fn' is not in the default allow-list for postgres; if it is safe for your database, add it with SqlPolicy(extra_allowed_functions={...})
+```
+
+Add the names you have checked:
+
+```python
+SqlPolicy(dialect="postgres", extra_allowed_functions=frozenset({"my_fn", "reporting.my_fn"}))
+```
+
+A call written with a schema (`reporting.my_fn(...)`) is accepted when you add `reporting.my_fn` or `my_fn`; a listed
+name called in a schema other than `pg_catalog` (`public.lower(...)`) is treated as your own function and refused
+until you add it. `SqlPolicy(allowed_functions=...)` replaces the default list with your own, as before. The other
+dialects (MySQL/MariaDB, DuckDB, SQL Server, Oracle, ...) keep the deny-list; set `allowed_functions` for them.
+
+**The backstop still applies to every name, also to names you add:** the deny-list, the family rules below, the
+row-folding rules (aggregates and constructs that put many rows into one value), the text-query rule, unicode escapes
+and MySQL executable comments. Adding `pg_sleep` or `json_agg` to `extra_allowed_functions` does not let them through.
+`repeat`, `printf`, `randomblob` and `zeroblob` are not on the list, because they build large values.
+
+`lpad` and `rpad` are accepted only when the length is written as a number of at most 1000 (`lpad(code, 5, '0')`); a column, an expression or a larger number is refused.
+
 ### Supported SQL dialects
 
-Tested in depth: PostgreSQL and SQLite. Experimental: MySQL/MariaDB, DuckDB, SQL Server (T-SQL), Oracle and others. For experimental dialects, always set allowed_tables and an allowed_functions allow-list; we fix reported gaps in point releases.
+Tested in depth: PostgreSQL and SQLite, which use the default function allow-list above. Experimental: MySQL/MariaDB, DuckDB, SQL Server (T-SQL), Oracle and others, which use a deny-list of functions. For experimental dialects, always set allowed_tables and an allowed_functions allow-list; we fix reported gaps in point releases.
 
 Always set SqlPolicy(dialect=...) to the database you run; the default (None) is a generic reading and can differ from MySQL/SQLite on comments.
 For MariaDB use `dialect="mysql"`.
 
-For PostgreSQL and SQLite (and for the default `dialect=None`; the PostgreSQL rules also for `redshift`,
-`materialize` and `risingwave`) whole families of system names are blocked, so a new
+These rules run in every case, also on names you allow. For PostgreSQL and SQLite (and for the default
+`dialect=None`; the PostgreSQL rules also for `redshift`, `materialize` and `risingwave`) whole families of system
+names are blocked, so a new
 system function is refused before anyone lists it: functions starting with `pg_`, `lo_`, `txid_` or `dblink`, and
 tables starting with `pg_`, except `pg_typeof`, `pg_size_pretty`, `pg_column_size` and the schema tables `pg_tables`,
 `pg_views`, `pg_indexes`, `pg_class`, `pg_namespace`, `pg_attribute`, `pg_type` (and `information_schema`, except
@@ -364,13 +399,14 @@ functions starting with `read_`, ending in `_scan`, or with `execute` or `serial
 whose output columns come from the data (DuckDB `ON col` without `IN`, Snowflake `IN (ANY ...)` or `IN (SELECT ...)`)
 is blocked as row-folding; a PIVOT that lists its values is allowed. `--` without a following space is refused for
 `mysql`, `doris`, `starrocks`, `singlestore` and `dialect=None`. A unicode-escaped name or string (`U&"..."`, `U&'...'`) is
-blocked in every dialect.
+blocked in every dialect. A function whose argument is a bare query (`JSON_ARRAY(SELECT ...)`, `ARRAY(SELECT ...)`)
+is blocked as row-folding; EXISTS, IN, ANY / ALL and a bracketed scalar sub-query are allowed.
 
 ### Who maintains it, and how
 
 Sangop is maintained by Arvind Kumar, an independent developer in Raipur, India, who decides what it does and
 signs off every release. Development uses AI coding assistants under fixed rules: every change starts with a
-failing test; the full suite (about 1,500 tests) runs on Linux and Windows before a release; a separate AI-assisted
+failing test; the full suite (about 2,100 tests) runs on Linux and Windows before a release; a separate AI-assisted
 security review attacks each release candidate, and every fixed finding gets a regression test. None of this is a
 third-party audit; one is planned before any enterprise offering. You don't have to take our word for it: the code,
 the tests and the speed benchmark are all here. Run them, and try to break it ([SECURITY.md](SECURITY.md)).
@@ -482,7 +518,8 @@ the tests and the speed benchmark are all here. Run them, and try to break it ([
 - The SQL guard does not stop a query that is merely heavy (for example `count(*)` over a cross join of five
   tables); set `statement_timeout`, `lock_timeout` and `idle_in_transaction_session_timeout` on the database user.
 - Wide self-joins or pivots that list their values can still return many values per row within the LIMIT; keep allowed_tables narrow and database timeouts on.
-- The SQL guard is deny-list based for functions; MySQL/MariaDB executable comments (/*! */) are blocked outright. Database-user permissions remain the primary defence (see Security model).
+- For PostgreSQL, SQLite and `dialect=None` the SQL guard accepts only functions on its default allow-list plus the names you add; it judges a function by its name, so a name you add is trusted as you added it (the backstop rules still apply). For the other dialects it is deny-list based for functions. MySQL/MariaDB executable comments (/*! */) are blocked outright. Database-user permissions remain the primary defence (see Security model).
+- `generate_series` is on the default allow-list; a very large range is a heavy query, so keep the database timeouts above.
 - Function arguments that look like SQL text (e.g. 'SELECT …') are refused, except as arguments of common string and date functions (coalesce, replace, concat, lower …), because several database functions run such text as a query.
 - Text assembled at run time (for example 'SEL' || 'ECT …' or concat(...)) is not recognised as a query; functions that run text are blocked by name, and database-user permissions remain the main defence.
 - SQL checks assume the right `dialect` is set in `SqlPolicy`; a statement the chosen dialect cannot parse is

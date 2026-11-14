@@ -43,6 +43,7 @@ What the open core does today:
 - SQL guard: blocked more write, row-folding and file-reading functions, PostgreSQL attribute-notation aggregates and DuckDB top-N aggregates, SQLite virtual tables and pragma functions, unicode-escaped names, http/fdw extension calls (internal AI-assisted review, 14 Nov 2026).
 - SQL guard: PostgreSQL `pg_*` / `lo_*` / `txid_*` / `dblink*`, SQLite `sqlite_*` and DuckDB `read_*` / `*_scan` names are blocked as whole families, with a short named list of harmless exceptions; SQL over 100 KB is refused; with `dialect="mysql"` (also for MariaDB), `--` without a following space is refused (see README, Supported SQL dialects). README: database settings for the agent's user, each checked on PostgreSQL 16 and SQLite.
 - SQL guard: blocked PostgreSQL crosstab/xpath_table, DuckDB serialized-SQL execution and dynamic PIVOT (row-folding), plus more system tables (internal AI-assisted review 3, 14 Nov 2026)
+- SQL guard: PostgreSQL and SQLite now use a default function allow-list; unknown functions are refused unless added via extra_allowed_functions (internal AI-assisted review 4, 15 Nov 2026).
 - **Windows:** the first full test run on Windows found two gaps in the open core's tests (none in the library): the
   test that keeps the examples offline also blocked the loopback connection that every asyncio event loop makes on
   Windows, and the HTTP compatibility test sent its helper server's output to a pipe nobody read, so the server

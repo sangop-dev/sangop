@@ -84,6 +84,12 @@ DEFAULT_DENIED_FUNCTIONS = frozenset({
     # DuckDB secrets and settings (review 3, L1); MySQL replication waits (review 3, L2)
     "duckdb_secrets", "duckdb_settings", "which_secret",
     "source_pos_wait", "wait_for_executed_gtid_set", "wait_until_sql_thread_after_gtids",
+    # review 4 (15 Nov 2026): functions that change tables or pages inside a SELECT (H3, M2, L1); also refused when a
+    # user adds the name to extra_allowed_functions
+    "dropgeometrytable", "dropgeometrycolumn", "addgeometrycolumn", "updategeometrysrid", "populate_geometry_columns",
+    "postgis_extensions_upgrade", "droptopology", "createtopology", "addtopogeometrycolumn", "addrasterconstraints",
+    "droprasterconstraints", "heap_force_kill", "heap_force_freeze", "autoprewarm_dump_now",
+    "autoprewarm_start_worker",
 })
 
 # System catalogs that expose server configuration or credentials (re-audit R3). Matched on the bare table name,
@@ -124,6 +130,9 @@ MYSQL_LIKE_DIALECTS = ("", "mysql", "doris", "starrocks", "singlestore")
 
 # Aggregates that fold many rows into ONE value: they would defeat the row-count (LIMIT) guard (audit finding H4).
 CONCAT_AGGREGATES = frozenset({
+    # review 4 (15 Nov 2026, H2): aggregates that fold whole rows or many rows' locations into one value
+    "st_asmvt", "st_asgeobuf", "st_asflatgeobuf", "st_collect", "st_makeline", "st_union", "st_memunion",
+    "st_polygonize", "st_clusterintersecting", "st_clusterwithin", "st_coverageunion",
     "string_agg", "group_concat", "listagg", "json_agg", "jsonb_agg", "json_object_agg", "jsonb_object_agg",
     "json_group_array", "json_group_object", "array_agg", "xmlagg", "collect_list", "collect_set", "list",
     "array_concat_agg", "string_agg_distinct", "wm_concat", "json_arrayagg", "json_objectagg", "any_value_list",
@@ -188,6 +197,9 @@ SAFE_TEXT_ARG_FUNCTIONS = frozenset({
     # second follow-up, 14 Nov 2026
     "regexp_match", "regexp_matches", "regexp_split_to_array", "regexp_split_to_table", "regexp_count",
     "regexp_instr", "regexp_substr", "regexp_extract", "similar_to", "to_number", "format",
+    # review 4 (15 Nov 2026, L3): array constructors, JSON object builders and text search parse text, never run it
+    "array", "json_build_object", "jsonb_build_object", "to_tsquery", "plainto_tsquery", "phraseto_tsquery",
+    "websearch_to_tsquery", "to_tsvector",
 })
 _SAFE_TEXT_ARG_CLASSES = frozenset({
     "coalesce", "nullif", "greatest", "least", "concat", "concatws", "replace", "translate", "lower", "upper",
@@ -196,6 +208,7 @@ _SAFE_TEXT_ARG_CLASSES = frozenset({
     "tsordstodate", "strtotime", "date", "datefromparts", "timestampfromparts", "jsonextract", "jsonextractscalar",
     "regexpreplace", "regexplike", "if", "nvl2", "case",
     "regexpcount", "regexpinstr", "regexpsubstr", "regexpextract", "tonumber", "format", "numbertostr",
+    "array", "jsonobject",
 })
 # String nodes whose text is checked (D-117 follow-ups): quoted literals, and every other string-literal node sqlglot
 # has - RawString (PostgreSQL / DuckDB $$...$$, $tag$...$tag$), ByteString (E'...'), National (N'...'),
@@ -217,8 +230,8 @@ def _decoded(arg, text: str) -> str:
 
 
 def _argument_text(arg) -> Optional[str]:
-    while isinstance(arg, (exp.Cast, exp.TryCast, exp.Paren)):
-        arg = arg.this
+    while isinstance(arg, (exp.Cast, exp.TryCast, exp.Paren, exp.Kwarg, exp.PropertyEQ)):
+        arg = arg.expression if isinstance(arg, (exp.Kwarg, exp.PropertyEQ)) else arg.this
     if isinstance(arg, exp.Literal):
         return str(arg.this) if arg.is_string else None
     if (isinstance(arg, exp.Expression) and not isinstance(arg, exp.Func) and isinstance(arg.this, str)
@@ -248,7 +261,7 @@ def _sql_text_arguments(stmt: exp.Expression) -> list:
         for value in node.args.values():
             for arg in (value if isinstance(value, list) else [value]):
                 text = _argument_text(arg)
-                if text is not None and _SQL_TEXT_ARGUMENT.match(text):
+                if text is not None and _looks_like_sql(text):
                     found.append(node.name.lower() if isinstance(node, exp.Anonymous) else node.sql_name().lower())
     return found
 
@@ -314,9 +327,37 @@ MAX_SQL_BYTES = 100 * 1024
 # a nested comment for dialect=None.
 _DASH_DASH_NO_SPACE = re.compile(r"--(?=\S)")
 # A string argument that reads as SQL: a statement keyword as a whole word, then more text (D-117)
+# The keyword may be followed by whitespace and more text, or directly by * ( " ` [ (review 4, M1: 'SELECT*FROM t',
+# 'SELECT(email)FROM t'); a single word ('from', 'select') or a longer word ('selected', 'showcase') is plain text.
 _SQL_TEXT_ARGUMENT = re.compile(
-    r"^\s*\(*\s*(select|with|values|table|from|insert|update|delete|merge|copy|call|exec|pivot|unpivot)\s+\S",
+    r"(select|with|values|table|from|insert|update|delete|merge|copy|call|exec|execute|pivot|unpivot"
+    r"|explain|show|prepare|do)(?:\s+\S|[*(\"`\[])",
     re.IGNORECASE)
+
+
+def _looks_like_sql(text: str) -> bool:
+    """Leading /* ... */ and -- comments are removed first (review 4, M1). Backslash escapes (E'...\\n...', which
+    sqlglot 28.5 keeps as written) are also read decoded."""
+    if "\\" in text:
+        try:
+            decoded = text.encode("latin-1", "backslashreplace").decode("unicode_escape")
+        except (UnicodeDecodeError, ValueError):
+            decoded = text
+        if decoded != text and _looks_like_sql(decoded.replace("\\", "")):
+            return True
+    i, n = 0, len(text)
+    while i < n:                                         # linear scan: no regex backtracking on long input
+        if text[i].isspace() or text[i] == "(":
+            i += 1
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+        elif text.startswith("--", i):
+            end = text.find("\n", i + 2)
+            i = n if end < 0 else end + 1
+        else:
+            break
+    return bool(_SQL_TEXT_ARGUMENT.match(text, i))
 
 # A table "name" with one of these characters is a file path or URL (DuckDB: SELECT * FROM '/etc/passwd') (M1)
 _PATH_CHARS = frozenset("/\\.:")   # "*", "?" and "~" removed: BigQuery wildcard tables `events_*` (review 2 false positive)
@@ -339,7 +380,8 @@ class SqlPolicy:
     allowed_tables: Optional[FrozenSet[str]] = None
     dialect: Optional[str] = None          # "postgres", "sqlite", "mysql", ...
     extra_denied_functions: FrozenSet[str] = field(default_factory=frozenset)
-    allowed_functions: Optional[FrozenSet[str]] = None   # strict allow-list of function names (None = deny-list only)
+    allowed_functions: Optional[FrozenSet[str]] = None   # your own full allow-list (None = the default, see below)
+    extra_allowed_functions: FrozenSet[str] = field(default_factory=frozenset)   # names added to the allow-list
     allow_recursive: bool = False          # WITH RECURSIVE can run for ever / eat memory: blocked unless you opt in
 
 
@@ -413,6 +455,7 @@ def _family_denied_functions(funcs: set, dialect: Optional[str]) -> set:
     if d in ("", "sqlite"):
         found |= {n for n in funcs if n.startswith("sqlite_") and n not in SQLITE_HARMLESS_FUNCTIONS}
         found |= {n for n in funcs if n.startswith("pragma_") and n not in SQLITE_SCHEMA_PRAGMAS}  # G2
+        found |= {n for n in funcs if n in ("eval", "sha3_query")}                  # review 4, L2: run text as SQL
     return found
 
 
@@ -430,6 +473,228 @@ def _family_denied_tables(refs: list, dialect: Optional[str]) -> set:
                                     or name in SQLITE_DENIED_TABLES):                             # G2
             found.add(".".join(x for x in ref if x))
     return found
+
+
+# ---- Default function allow-list (15 Nov 2026, D-119) --------------------------------------------------------------------
+# PostgreSQL-like dialects, SQLite and dialect=None: a function that is not on this list is refused. A deny-list kept
+# losing to new names (every security review found new ones), so the default is now "known safe names only"; add your
+# own with SqlPolicy(extra_allowed_functions=...). The deny-list, the family rules, the row-folding rules, the
+# text-query rule and the raw-text checks still run first, on every name, also on names you allow.
+ALLOWLIST_DIALECTS = PG_LIKE_DIALECTS + ("sqlite",)
+
+_ALLOWED_SHARED = frozenset({
+    # aggregates (max / min with one argument; the many-value forms are row-folding, see above)
+    "count", "sum", "avg", "min", "max", "bool_and", "bool_or", "every", "stddev", "stddev_samp", "stddev_pop",
+    "variance", "var_samp", "var_pop", "corr", "covar_pop", "covar_samp", "regr_avgx", "regr_avgy", "regr_count",
+    "regr_intercept", "regr_r2", "regr_slope", "regr_sxx", "regr_sxy", "regr_syy", "percentile_cont",
+    "percentile_disc", "mode", "any_value",
+    # window functions
+    "row_number", "rank", "dense_rank", "percent_rank", "cume_dist", "ntile", "lag", "lead", "first_value",
+    "last_value", "nth_value",
+    # conditionals
+    "coalesce", "nullif", "greatest", "least", "ifnull", "iif", "nvl",
+    # math
+    "abs", "ceil", "ceiling", "floor", "round", "trunc", "mod", "power", "pow", "sqrt", "cbrt", "exp", "ln", "log",
+    "log10", "log2", "sign", "div", "pi", "degrees", "radians", "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+    "width_bucket",
+    # strings (repeat, printf, randomblob and zeroblob are not here: they build large values; lpad / rpad only with a
+    # literal length up to _MAX_PAD_LENGTH)
+    "lower", "upper", "initcap", "trim", "btrim", "ltrim", "rtrim", "length", "char_length", "character_length",
+    "octet_length", "bit_length", "substring", "substr", "left", "right", "position", "strpos", "instr", "replace",
+    "translate", "split_part", "concat", "concat_ws", "starts_with", "ascii", "chr", "md5", "encode", "decode",
+    "reverse", "format", "regexp_match", "regexp_matches", "regexp_replace", "regexp_like", "regexp_count",
+    "regexp_instr", "regexp_substr", "regexp_split_to_array", "similar_to", "lpad", "rpad",
+    # date / time
+    "now", "current_date", "current_time", "current_timestamp", "localtime", "localtimestamp", "date_trunc",
+    "date_part", "extract", "to_char", "to_date", "to_timestamp", "to_number", "date", "time", "datetime",
+    "julianday", "strftime",
+    # JSON: reading values out, and building one object per row
+    "json_extract_path_text", "jsonb_extract_path_text", "json_extract_path", "jsonb_extract_path", "json_typeof",
+    "jsonb_typeof", "json_array_length", "jsonb_array_length", "json_extract", "json_build_object",
+    "jsonb_build_object", "to_jsonb", "json_object",
+    # rows from a range (heavy ranges need a database statement_timeout, see Known limits)
+    "generate_series",
+    # found common while testing (15 Nov 2026): arrays to text, splitting text into rows
+    "array_to_string", "regexp_split_to_table",
+}) | PG_HARMLESS_FUNCTIONS | SQLITE_HARMLESS_FUNCTIONS | SQLITE_SCHEMA_PRAGMAS
+_ALLOWED_PG_ONLY = frozenset({
+    "date_bin", "age", "make_date", "make_time", "make_timestamp", "make_timestamptz", "make_interval", "isfinite",
+    "justify_days", "justify_hours", "justify_interval", "array_position", "to_tsvector", "to_tsquery",
+    "plainto_tsquery", "phraseto_tsquery", "websearch_to_tsquery",
+})
+_ALLOWED_SQLITE_ONLY = frozenset({
+    "total", "quote", "typeof", "unicode", "hex", "unixepoch", "timediff", "json_type", "json_valid",
+})
+# The names sqlglot gives to the functions above (it turns many calls into its own nodes: ifnull / nvl -> coalesce,
+# instr / strpos -> str_position, strftime -> time_to_str, lpad / rpad -> pad, ...); measured on sqlglot 28.5 and
+# 30.31 (15 Nov 2026).
+_ALLOWED_SQLGLOT_NAMES = frozenset({
+    "anyvalue", "arrayposition", "bitlength", "booland_agg", "boolor_agg", "cast", "char", "concatws", "covarpop",
+    "covarsamp", "cumedist", "currentdate", "currenttime", "currenttimestamp", "current_version", "currentversion", "datebin", "datetrunc", "decode_case",
+    "decodecase", "denserank", "exploding_generate_series", "explodinggenerateseries", "firstvalue",
+    "generateseries", "if", "json_extract_scalar", "jsonextract", "jsonextractscalar", "jsontype", "justifydays",
+    "justifyhours", "justifyinterval", "lastvalue", "lcase", "len", "logical_and", "logical_or", "logicaland",
+    "logicalor", "makeinterval", "nthvalue", "pad", "percentilecont", "percentiledisc", "percentrank", "regexpcount",
+    "regexpinstr", "regexplike", "regexpreplace", "regexpsubstr", "regravgx", "regravgy", "regrcount",
+    "regrintercept", "regrr2", "regrslope", "regrsxx", "regrsxy", "regrsyy", "rownumber", "signum", "splitpart",
+    "startswith", "stddevpop", "stddevsamp", "stdev", "str_position", "str_to_date", "str_to_time", "strposition",
+    "strtodate", "strtotime", "time_from_parts", "time_to_str", "timefromparts", "timestamp_from_parts",
+    "timestamp_trunc", "timestampfromparts", "timestamptrunc", "timetostr", "tochar", "tonumber", "truncate",
+    "ts_or_ds_to_timestamp", "tsordstotimestamp", "ucase", "unix_to_time", "unixtotime", "variance_pop",
+    "variance_samp", "variancepop", "widthbucket",
+})
+# sqlglot keeps some syntax as function nodes; these are syntax, not function calls: CAST, CASE, IF, EXTRACT,
+# INTERVAL, the ARRAY[...] constructor, CURRENT_DATE / CURRENT_TIME / CURRENT_TIMESTAMP, and every operator node
+# (AND, OR, ->, ->>, @>, ~, ...). BETWEEN, IN, LIKE and ILIKE are not function nodes in sqlglot.
+_SYNTAX_FUNCS = ("Cast", "TryCast", "Paren", "Case", "If", "Extract", "Interval", "Array", "Distinct", "MatchAgainst",
+                 "CurrentDate", "CurrentTime", "CurrentTimestamp", "Between", "In", "Like", "ILike", "Collate")
+_OPERATOR_FUNCS = tuple(c for c in (getattr(exp, n, None) for n in ("Binary", "Connector", "Unary", "Predicate",
+                                                                    "SubqueryPredicate")) if c is not None)
+_MAX_PAD_LENGTH = 1000
+
+
+def default_allowed_functions(dialect: Optional[str]) -> Optional[FrozenSet[str]]:
+    """The default function allow-list for ``dialect``, or None where the default is the deny-list only
+    (experimental dialects: MySQL, DuckDB, SQL Server, Oracle, ...)."""
+    d = (dialect or "").lower()
+    if d not in ALLOWLIST_DIALECTS:
+        return None
+    names = _ALLOWED_SHARED | _ALLOWED_SQLGLOT_NAMES
+    if d in PG_LIKE_DIALECTS:
+        names |= _ALLOWED_PG_ONLY
+    if d in ("", "sqlite"):
+        names |= _ALLOWED_SQLITE_ONLY
+    return names
+
+
+def _node_names(node: exp.Func) -> set:
+    if isinstance(node, exp.Anonymous):
+        return {_func_name(node)}
+    names = {_func_name(node), type(node).__name__.lower()}
+    try:
+        names |= {n.lower() for n in type(node).sql_names()}
+    except Exception:  # pragma: no cover - defensive
+        pass
+    return names
+
+
+def _qualifier(node: exp.Func) -> Optional[str]:
+    parent = node.parent
+    if isinstance(parent, exp.Dot) and parent.expression is node:
+        return ".".join(str(p.this).lower() for p in parent.this.find_all(exp.Identifier)) or None
+    return None
+
+
+def _pad_too_long(node: exp.Func) -> bool:
+    length = node.args.get("expression")
+    if isinstance(length, exp.Literal) and not length.is_string:
+        try:
+            return int(str(length.this)) > _MAX_PAD_LENGTH
+        except ValueError:
+            return True
+    return True                                        # a column or an expression: size unknown, refuse
+
+
+def _written_name(node: exp.Func, dialect: Optional[str]) -> Optional[str]:
+    """The name as the dialect writes the call (JSONObject -> json_object), for typed nodes; None if unknown."""
+    try:
+        text = node.sql(dialect=dialect)
+    except Exception:  # pragma: no cover - defensive
+        return None
+    head = text.split("(", 1)[0].strip().lower()
+    return head if head and "(" in text and re.fullmatch(r"[a-z_][a-z0-9_]*", head) else None
+
+
+_IDENT_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_$")
+
+
+def _clean_ident(text: str) -> Optional[str]:
+    text = text.strip().strip('"`[]').lower()
+    return text if text and all(c in _IDENT_CHARS for c in text) else None
+
+
+def _written_in_sql(node: exp.Func, sql: Optional[str], dialect: Optional[str]) -> str:
+    """The function name as the query wrote it (lpad, not pad; string_agg, not group_concat), for messages.
+
+    sqlglot records where most names stand in the text (node.meta start / end); when it does not, the name is read
+    just before the bracket that opens the call; failing that, the name the dialect would write."""
+    if isinstance(node, exp.Anonymous):
+        return _func_name(node)
+    if sql:
+        meta = node.meta or {}
+        start, end = meta.get("start"), meta.get("end")
+        if isinstance(start, int) and isinstance(end, int) and 0 <= start <= end < len(sql):
+            name = _clean_ident(sql[start:end + 1])
+            if name:
+                return name
+        firsts = [n.meta.get("start") for n in node.walk() if n is not node and n.meta
+                  and isinstance(n.meta.get("start"), int)]
+        if firsts:
+            bracket = sql.rfind("(", 0, min(firsts))
+            i = bracket - 1
+            while i >= 0 and sql[i].isspace():
+                i -= 1
+            j = i
+            while j >= 0 and (sql[j].lower() in _IDENT_CHARS or sql[j] in '"`'):
+                j -= 1
+            if bracket > 0 and i > j:
+                name = _clean_ident(sql[j + 1:i + 1])
+                if name:
+                    return name
+    return _written_name(node, dialect) or _func_name(node)
+
+
+def _written_map(stmt: exp.Expression, sql: Optional[str], dialect: Optional[str]) -> dict:
+    """sqlglot's names for each call (node names, class name) -> the name the query wrote."""
+    names = {}
+    for node in stmt.find_all(exp.Func):
+        if type(node).__name__ in _SYNTAX_FUNCS or isinstance(node, _OPERATOR_FUNCS):
+            continue
+        written = _written_in_sql(node, sql, dialect)
+        for key in _node_names(node) | {type(node).__name__.lower()}:
+            names.setdefault(key, written)
+    return names
+
+
+def _as_written(names, stmt: exp.Expression, sql: Optional[str], dialect: Optional[str]) -> str:
+    wmap = _written_map(stmt, sql, dialect)
+    shown = []
+    for name in sorted(names):
+        head, bracket, rest = name.partition("(")
+        out = wmap.get(name) or (wmap[head] + bracket + rest if bracket and head in wmap else name)
+        if out not in shown:
+            shown.append(out)
+    return ", ".join(shown)
+
+
+def _functions_outside(stmt: exp.Expression, allow: set, extra: set, size_checked: bool,
+                       dialect: Optional[str] = None, sql: Optional[str] = None) -> list:
+    """Function calls that are not on ``allow``, in the order they appear (each name once, at most five)."""
+    refused = []
+    for node in stmt.find_all(exp.Func):
+        if type(node).__name__ in _SYNTAX_FUNCS or isinstance(node, _OPERATOR_FUNCS):
+            continue
+        names = _node_names(node)
+        qual = _qualifier(node)
+        shown = _func_name(node)
+        if qual and qual != "pg_catalog":
+            ok = f"{qual}.{shown}" in allow or bool(names & extra)
+            shown = f"{qual}.{shown}"
+        else:
+            ok = bool(names & allow)
+        if not ok and not qual and not isinstance(node, exp.Anonymous):
+            written = _written_name(node, dialect)       # sqlglot's own name can differ (j_s_o_n_object)
+            if written:
+                ok = written in allow
+        if ok and size_checked and "pad" in names and not (names & extra) and _pad_too_long(node):
+            ok = False
+        if not ok and not qual:
+            shown = _written_in_sql(node, sql, dialect)      # the name as the query wrote it
+        if not ok and shown not in refused:
+            refused.append(shown)
+            if len(refused) >= 5:
+                break
+    return refused
 
 
 def _function_names(stmt: exp.Expression) -> set:
@@ -661,23 +926,50 @@ def _check_sql(sql: str, policy: SqlPolicy) -> SqlVerdict:
                    for x in node.expressions):
                 bad_agg = {"array(subquery)"}
                 break
+    if not bad_agg:
+        # A function whose argument is a bare query folds that query's rows into one value: PostgreSQL 16
+        # JSON_ARRAY(SELECT ...) (review 4, H1). EXISTS / IN / ANY / ALL and a bracketed scalar sub-query are fine.
+        for node in stmt.find_all(exp.Func):
+            if isinstance(node, (exp.Exists, exp.Any, exp.All)) or isinstance(node, _OPERATOR_FUNCS):
+                continue
+            for value in node.args.values():
+                for arg in (value if isinstance(value, list) else [value]):
+                    if isinstance(arg, (exp.Select, exp.Union, exp.Intersect, exp.Except)):
+                        bad_agg = {f"{_func_name(node)}(query)"}
+                        break
+                if bad_agg:
+                    break
+            if bad_agg:
+                break
     if bad_agg:
-        return SqlVerdict(False, f"row-folding aggregate blocked (bulk extraction guard): {', '.join(sorted(bad_agg))}",
-                          sql, stype)
+        return SqlVerdict(False, "row-folding aggregate blocked (bulk extraction guard): "
+                                 f"{_as_written(bad_agg, stmt, sql, policy.dialect)}", sql, stype)
     denied_f = ((funcs | _function_qualifiers(stmt)) & (DEFAULT_DENIED_FUNCTIONS
                                                         | {f.lower() for f in policy.extra_denied_functions})
                 | _family_denied_functions(funcs, policy.dialect))
     if denied_f:
-        return SqlVerdict(False, f"denied function(s): {', '.join(sorted(denied_f))}", sql, stype)
+        return SqlVerdict(False, f"denied function(s): {_as_written(denied_f, stmt, sql, policy.dialect)}", sql, stype)
     text_query = _sql_text_arguments(stmt)
     if text_query:
-        return SqlVerdict(False, f"query given as text blocked (fail-closed): {', '.join(sorted(set(text_query)))}",
-                          sql, stype)
+        return SqlVerdict(False, "query given as text blocked (fail-closed): "
+                                 f"{_as_written(set(text_query), stmt, sql, policy.dialect)}", sql, stype)
+    extra_allow = {f.lower() for f in policy.extra_allowed_functions}
     if policy.allowed_functions is not None:
-        allow = {f.lower() for f in policy.allowed_functions}
-        extra = {n for n in funcs if n not in allow}
-        if extra:
-            return SqlVerdict(False, f"function(s) not in allow-list: {', '.join(sorted(extra))}", sql, stype)
+        base = {f.lower() for f in policy.allowed_functions}
+    else:
+        base = default_allowed_functions(policy.dialect)
+    if base is not None:
+        refused = _functions_outside(stmt, base | extra_allow, extra_allow,
+                                     size_checked=policy.allowed_functions is None, dialect=policy.dialect, sql=sql)
+        if refused:
+            names = ", ".join(f"'{n}'" for n in refused)
+            if policy.allowed_functions is not None:
+                return SqlVerdict(False, f"function(s) not in allow-list: {', '.join(refused)}", sql, stype)
+            word = "function" if len(refused) == 1 else "functions"
+            verb = "is" if len(refused) == 1 else "are"
+            return SqlVerdict(False, f"{word} {names} {verb} not in the default allow-list for "
+                                     f"{policy.dialect or 'dialect=None'}; if it is safe for your database, add it with "
+                                     f"SqlPolicy(extra_allowed_functions={{...}})", sql, stype)
 
     if not policy.allow_recursive:
         for w in stmt.find_all(exp.With):
