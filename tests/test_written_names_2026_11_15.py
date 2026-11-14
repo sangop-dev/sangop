@@ -13,9 +13,10 @@ from sangop.sqlguard import SqlPolicy, check_sql
 ])
 @pytest.mark.parametrize("dialect", ["postgres", "sqlite", None])
 def test_allow_list_message_uses_the_written_name(sql, written, internal, dialect):
+    # since review 5 (15 Nov 2026) a too-long lpad / rpad has its own message, "lpad/rpad length must be ..."
     v = check_sql(sql, SqlPolicy(dialect=dialect))
     assert v.allowed is False
-    assert f"'{written}'" in v.reason and internal not in v.reason, v.reason
+    assert "lpad/rpad" in v.reason and internal not in v.reason, v.reason
 
 
 @pytest.mark.parametrize("sql, dialect, written", [

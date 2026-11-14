@@ -377,6 +377,12 @@ and MySQL executable comments. Adding `pg_sleep` or `json_agg` to `extra_allowed
 
 `lpad` and `rpad` are accepted only when the length is written as a number of at most 1000 (`lpad(code, 5, '0')`); a column, an expression or a larger number is refused.
 
+`format()` is accepted only when its format is written in the query, with no `*` width and no width or precision above 1000 (`format('%s-%s', a, b)`, `format('%10s', name)`).
+
+`percentile_cont`, `percentile_disc` and the quantile functions take one plain number from 0 to 1 (or a bind parameter) as the fraction; an array, a cast, a string, a column or a sub-query is refused as row-folding.
+
+Names are checked as the query writes them: a name that sqlglot maps to a listed function (for example `ucase`, `year` or `array_join` on PostgreSQL) is refused unless it is itself on the list.
+
 ### Supported SQL dialects
 
 Tested in depth: PostgreSQL and SQLite, which use the default function allow-list above. Experimental: MySQL/MariaDB, DuckDB, SQL Server (T-SQL), Oracle and others, which use a deny-list of functions. For experimental dialects, always set allowed_tables and an allowed_functions allow-list; we fix reported gaps in point releases.

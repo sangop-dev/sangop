@@ -176,11 +176,35 @@ def _top_n_or_multi_value(stmt: exp.Expression) -> set:
             found.add(f"{_func_name(node)}(x, y, n)")
         elif cls in _MULTI_QUANTILE_CLASSES or (isinstance(node, exp.Anonymous)
                                                 and ("quantile" in _func_name(node) or "percentile" in _func_name(node))):
-            for arg in node.iter_expressions():
-                if isinstance(arg, (exp.Array, exp.List)):
-                    found.add(f"{_func_name(node)}(array)")
-                    break
+            # The fraction must be ONE plain number from 0 to 1 (or a bind placeholder): an array, a cast, a string,
+            # a column, a sub-query or an expression can hold many fractions, one row's value each (review 5, H1).
+            fraction = _quantile_fraction(node)
+            if fraction is not None and not _plain_fraction(fraction):
+                found.add(f"{_func_name(node)}(array)")
     return found
+
+
+def _quantile_fraction(node: exp.Func) -> Optional[exp.Expression]:
+    if isinstance(node, exp.Anonymous):
+        return node.expressions[-1] if node.expressions else None
+    if node.args.get("quantile") is not None:
+        return node.args["quantile"]
+    if node.args.get("expression") is not None:          # DuckDB percentile_cont(x, 0.5)
+        return node.args["expression"]
+    return node.this                                      # percentile_cont(0.5) WITHIN GROUP (ORDER BY x)
+
+
+def _plain_fraction(arg: exp.Expression) -> bool:
+    while isinstance(arg, exp.Paren):
+        arg = arg.this
+    if isinstance(arg, (exp.Placeholder, exp.Parameter)):
+        return True
+    if isinstance(arg, exp.Literal) and not arg.is_string:
+        try:
+            return 0 <= float(str(arg.this)) <= 1
+        except ValueError:
+            return False
+    return False
 
 
 # Common string / date functions that never run a text argument as a query: plain text in their arguments is not
@@ -518,16 +542,25 @@ _ALLOWED_SHARED = frozenset({
     "array_to_string", "regexp_split_to_table",
 }) | PG_HARMLESS_FUNCTIONS | SQLITE_HARMLESS_FUNCTIONS | SQLITE_SCHEMA_PRAGMAS
 _ALLOWED_PG_ONLY = frozenset({
+    # arrays and JSON: these expand one value or one row, they never fold rows (review 5, L2; a folding sub-query
+    # inside is still refused by the row-folding rules)
+    "array_length", "array_upper", "array_lower", "array_ndims", "cardinality", "unnest", "string_to_array",
+    "array_positions", "array_remove", "array_replace", "array_append", "array_prepend", "array_cat",
+    "json_array_elements", "json_array_elements_text", "jsonb_array_elements", "jsonb_array_elements_text",
+    "json_each", "json_each_text", "jsonb_each", "jsonb_each_text", "json_object_keys", "jsonb_object_keys",
+    "json_array",                    # PostgreSQL 16 JSON_ARRAY(a, b): JSON_ARRAY(SELECT ...) stays row-folding (run4 H1)
     "date_bin", "age", "make_date", "make_time", "make_timestamp", "make_timestamptz", "make_interval", "isfinite",
     "justify_days", "justify_hours", "justify_interval", "array_position", "to_tsvector", "to_tsquery",
     "plainto_tsquery", "phraseto_tsquery", "websearch_to_tsquery",
 })
 _ALLOWED_SQLITE_ONLY = frozenset({
+    "json_each", "json_tree",                                                     # review 5, L2
     "total", "quote", "typeof", "unicode", "hex", "unixepoch", "timediff", "json_type", "json_valid",
 })
 # The names sqlglot gives to the functions above (it turns many calls into its own nodes: ifnull / nvl -> coalesce,
 # instr / strpos -> str_position, strftime -> time_to_str, lpad / rpad -> pad, ...); measured on sqlglot 28.5 and
-# 30.31 (15 Nov 2026).
+# 30.31 (15 Nov 2026). Used only when the name a call was written with cannot be found in the query text: a written
+# name must itself be on the list (review 5, L1: ucase, year, array_join are sqlglot names, not PostgreSQL ones).
 _ALLOWED_SQLGLOT_NAMES = frozenset({
     "anyvalue", "arrayposition", "bitlength", "booland_agg", "boolor_agg", "cast", "char", "concatws", "covarpop",
     "covarsamp", "cumedist", "currentdate", "currenttime", "currenttimestamp", "current_version", "currentversion", "datebin", "datetrunc", "decode_case",
@@ -559,7 +592,7 @@ def default_allowed_functions(dialect: Optional[str]) -> Optional[FrozenSet[str]
     d = (dialect or "").lower()
     if d not in ALLOWLIST_DIALECTS:
         return None
-    names = _ALLOWED_SHARED | _ALLOWED_SQLGLOT_NAMES
+    names = _ALLOWED_SHARED
     if d in PG_LIKE_DIALECTS:
         names |= _ALLOWED_PG_ONLY
     if d in ("", "sqlite"):
@@ -620,6 +653,13 @@ def _written_in_sql(node: exp.Func, sql: Optional[str], dialect: Optional[str]) 
     just before the bracket that opens the call; failing that, the name the dialect would write."""
     if isinstance(node, exp.Anonymous):
         return _func_name(node)
+    return _written_from_text(node, sql) or _written_name(node, dialect) or _func_name(node)
+
+
+def _written_from_text(node: exp.Func, sql: Optional[str]) -> Optional[str]:
+    """The name of a typed call as it stands in the query text, or None when it cannot be found there."""
+    if isinstance(node, exp.Anonymous):
+        return _func_name(node)
     if sql:
         meta = node.meta or {}
         start, end = meta.get("start"), meta.get("end")
@@ -641,7 +681,7 @@ def _written_in_sql(node: exp.Func, sql: Optional[str], dialect: Optional[str]) 
                 name = _clean_ident(sql[j + 1:i + 1])
                 if name:
                     return name
-    return _written_name(node, dialect) or _func_name(node)
+    return None
 
 
 def _written_map(stmt: exp.Expression, sql: Optional[str], dialect: Optional[str]) -> dict:
@@ -667,8 +707,52 @@ def _as_written(names, stmt: exp.Expression, sql: Optional[str], dialect: Option
     return ", ".join(shown)
 
 
-def _functions_outside(stmt: exp.Expression, allow: set, extra: set, size_checked: bool,
-                       dialect: Optional[str] = None, sql: Optional[str] = None) -> list:
+_FORMAT_SPEC = re.compile(r"%(?:\d+\$)?[-+ #0',!]*(\*(?:\d+\$)?|\d+)?(?:\.(\*(?:\d+\$)?|\d+))?")
+
+
+def _format_too_big(first: Optional[exp.Expression]) -> bool:
+    """format(): the format must be written in the query, with no '*' width / precision and none above
+    _MAX_PAD_LENGTH; otherwise one call can build a value of hundreds of megabytes (review 5, M1)."""
+    text = _argument_text(first) if first is not None else None
+    if text is None:
+        return True                                      # format taken from a column or an expression
+    i = 0
+    while True:
+        i = text.find("%", i)
+        if i < 0:
+            return False
+        if text.startswith("%%", i):
+            i += 2
+            continue
+        spec = _FORMAT_SPEC.match(text, i)
+        for part in (spec.group(1), spec.group(2)) if spec else ():
+            if part and (part.startswith("*") or int(part) > _MAX_PAD_LENGTH):
+                return True
+        i += 1
+
+
+def _size_refusal(stmt: exp.Expression, extra: set, sql: Optional[str], dialect: Optional[str]) -> Optional[str]:
+    """Allowed functions whose arguments can build a huge value (default allow-list only; a name the user adds to
+    extra_allowed_functions is the user's call)."""
+    for node in stmt.find_all(exp.Func):
+        if type(node).__name__ in _SYNTAX_FUNCS or isinstance(node, _OPERATOR_FUNCS):
+            continue
+        names = _node_names(node) | {_written_in_sql(node, sql, dialect)}
+        if names & extra:
+            continue
+        if "pad" in names and _pad_too_long(node):
+            return "lpad/rpad length must be a literal number up to 1000 (blocked: a longer value uses a lot of memory)"
+        if type(node).__name__ == "Format" or (isinstance(node, exp.Anonymous) and _func_name(node) == "format"):
+            first = (node.expressions[0] if node.expressions else None) if isinstance(node, exp.Anonymous) else node.this
+            if _format_too_big(first):
+                return ("format width too large / dynamic width blocked: format() needs its format written in the "
+                        "query, with no '*' and no width or precision above 1000")
+    return None
+
+
+def _functions_outside(stmt: exp.Expression, allow: set, extra: set,
+                       dialect: Optional[str] = None, sql: Optional[str] = None,
+                       node_names: FrozenSet[str] = frozenset()) -> list:
     """Function calls that are not on ``allow``, in the order they appear (each name once, at most five)."""
     refused = []
     for node in stmt.find_all(exp.Func):
@@ -677,17 +761,19 @@ def _functions_outside(stmt: exp.Expression, allow: set, extra: set, size_checke
         names = _node_names(node)
         qual = _qualifier(node)
         shown = _func_name(node)
+        written = None if isinstance(node, exp.Anonymous) else _written_from_text(node, sql)
         if qual and qual != "pg_catalog":
             ok = f"{qual}.{shown}" in allow or bool(names & extra)
             shown = f"{qual}.{shown}"
+        elif written:
+            # the name as written decides (review 5, L1): sqlglot turns names a database may not have (array_join,
+            # year, ucase, ...) into nodes whose own names are on the list
+            ok = written in allow
         else:
-            ok = bool(names & allow)
-        if not ok and not qual and not isinstance(node, exp.Anonymous):
-            written = _written_name(node, dialect)       # sqlglot's own name can differ (j_s_o_n_object)
-            if written:
-                ok = written in allow
-        if ok and size_checked and "pad" in names and not (names & extra) and _pad_too_long(node):
-            ok = False
+            ok = bool(names & (allow | node_names))
+            if not ok and not isinstance(node, exp.Anonymous):
+                rendered = _written_name(node, dialect)  # sqlglot's own name can differ (j_s_o_n_object)
+                ok = bool(rendered) and rendered in allow
         if not ok and not qual:
             shown = _written_in_sql(node, sql, dialect)      # the name as the query wrote it
         if not ok and shown not in refused:
@@ -958,9 +1044,15 @@ def _check_sql(sql: str, policy: SqlPolicy) -> SqlVerdict:
         base = {f.lower() for f in policy.allowed_functions}
     else:
         base = default_allowed_functions(policy.dialect)
+    if policy.allowed_functions is None and base is not None:
+        too_big = _size_refusal(stmt, extra_allow, sql, policy.dialect)
+        if too_big:
+            return SqlVerdict(False, too_big, sql, stype)
     if base is not None:
         refused = _functions_outside(stmt, base | extra_allow, extra_allow,
-                                     size_checked=policy.allowed_functions is None, dialect=policy.dialect, sql=sql)
+                                     dialect=policy.dialect, sql=sql,
+                                     node_names=_ALLOWED_SQLGLOT_NAMES if policy.allowed_functions is None
+                                     else frozenset())
         if refused:
             names = ", ".join(f"'{n}'" for n in refused)
             if policy.allowed_functions is not None:
