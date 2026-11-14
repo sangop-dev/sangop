@@ -52,6 +52,24 @@ DEFAULT_DENIED_FUNCTIONS = frozenset({
     "dbms_xmlgen", "dbms_xmlquery",
     # side effects outside the query: notifications, statistics reset (14 Nov 2026, L2)
     "pg_notify", "pg_stat_statements_reset",
+    # WRITE inside a plain SELECT: large objects, WAL messages, transaction ids (internal review 2, 14 Nov 2026, C1)
+    "lo_creat", "lo_truncate", "lo_truncate64", "lo_lseek", "lo_lseek64", "lo_tell", "lo_close",
+    "pg_logical_emit_message", "txid_current", "pg_current_xact_id",
+    # more advisory locks (review 2, L2)
+    "pg_try_advisory_xact_lock", "pg_advisory_xact_lock_shared", "pg_try_advisory_lock_shared",
+    "pg_try_advisory_xact_lock_shared",
+    # DuckDB: run a query or a table given as text (review 2, H6)
+    "query", "query_table",
+    # DuckDB: read files, other databases or file metadata (review 2, H7); see also the read_* / *_scan rule below
+    "read_json_objects", "read_ndjson_objects", "read_json_objects_auto", "read_ndjson_auto", "sqlite_scan",
+    "sqlite_attach", "parquet_metadata", "parquet_schema", "parquet_file_metadata", "parquet_kv_metadata",
+    "iceberg_scan", "delta_scan", "st_read", "postgres_scan", "postgres_query", "mysql_query",
+    # Oracle: network and metadata packages (review 2, M2)
+    "httpuritype", "utl_inaddr", "dbms_ldap", "xmlgen", "dbms_metadata",
+    # PostgreSQL extensions that schedule jobs, call the network or export to storage (review 2, M3)
+    "cron", "aws_s3", "net", "http", "http_get", "http_post",
+    # SQLite extensions that read files, archives or CSV (14 Nov 2026, G2)
+    "fsdir", "zipfile", "csv", "lsmode",
 })
 
 # System catalogs that expose server configuration or credentials (re-audit R3). Matched on the bare table name,
@@ -59,7 +77,27 @@ DEFAULT_DENIED_FUNCTIONS = frozenset({
 DEFAULT_DENIED_TABLES = frozenset({
     "pg_settings", "pg_file_settings", "pg_hba_file_rules", "pg_ident_file_mappings", "pg_shadow", "pg_authid",
     "pg_user_mappings", "pg_stat_activity",
+    "user_mapping_options",                           # shows foreign-server passwords (internal review 2, 14 Nov 2026, M3)
+    "pg_stat_statements", "pg_stat_statements_info",  # other sessions' query texts (14 Nov 2026, D-115)
 })
+
+# Whole-family rules (14 Nov 2026, D-115). In PostgreSQL (and the generic reading, dialect=None) every function whose
+# name starts with pg_, lo_, txid_ or dblink, and every table whose name starts with pg_, is denied - except the
+# harmless ones named here. In SQLite (and dialect=None) the same holds for sqlite_*. New system functions are
+# therefore blocked by default instead of waiting for someone to list them.
+PG_FUNCTION_FAMILIES = ("pg_", "lo_", "txid_", "dblink")
+PG_HARMLESS_FUNCTIONS = frozenset({"pg_typeof", "pg_size_pretty", "pg_column_size"})
+PG_SCHEMA_TABLES = frozenset({"pg_tables", "pg_views", "pg_indexes", "pg_class", "pg_namespace", "pg_attribute",
+                              "pg_type"})               # read to learn the schema
+SQLITE_HARMLESS_FUNCTIONS = frozenset({"sqlite_version", "sqlite_source_id", "sqlite_compileoption_used"})
+SQLITE_SCHEMA_TABLES = frozenset({"sqlite_master", "sqlite_schema", "sqlite_temp_master", "sqlite_temp_schema"})
+# SQLite pragma_* functions and tables are denied (14 Nov 2026, G2: pragma_integrity_check, pragma_database_list ...),
+# except these, read to learn the schema. dbstat (page-level statistics) is denied as a table.
+SQLITE_SCHEMA_PRAGMAS = frozenset({"pragma_table_info", "pragma_table_xinfo", "pragma_index_list", "pragma_index_info",
+                                   "pragma_foreign_key_list"})
+SQLITE_DENIED_TABLES = frozenset({"dbstat"})
+# PostgreSQL extension families (14 Nov 2026, G4): postgres_fdw*, http, http_*
+PG_EXTENSION_FAMILIES = ("postgres_fdw", "http_")
 
 # Aggregates that fold many rows into ONE value: they would defeat the row-count (LIMIT) guard (audit finding H4).
 CONCAT_AGGREGATES = frozenset({
@@ -72,24 +110,85 @@ CONCAT_AGGREGATES = frozenset({
     "jsonb_object_agg_unique_strict", "range_agg", "range_intersect_agg",
     # Oracle COLLECT, DuckDB histogram (14 Nov 2026, M1)
     "collect", "histogram",
+    # SQLite JSONB variants (14 Nov 2026, G1)
+    "jsonb_group_array", "jsonb_group_object",
+    # DuckDB approx_top_k (review 2, H5); Oracle CURSOR(SELECT ...) and MULTISET(SELECT ...) (review 2, M2)
+    "approx_top_k", "approxtopk", "cursor", "multiset",
 })
+
+
+def _is_folding_attribute(name: str) -> bool:
+    """PostgreSQL attribute notation: ``u.json_agg`` means ``json_agg(u)`` (review 2, H4). For a COLUMN name the
+    rule is narrower than for functions: a listed name, or a name ending in "agg"; a column such as
+    ``tag_aggregate_count`` is an ordinary column and stays allowed."""
+    return name in CONCAT_AGGREGATES or name.endswith("agg")
+
+
+_TOP_N_CLASSES = ("Max", "Min")                  # DuckDB max(x, n) / min(x, n): the n largest values (review 2, H5)
+_ARG_CLASSES = ("ArgMax", "ArgMin")              # arg_max / max_by (x, y, n)
+_MULTI_QUANTILE_CLASSES = ("PercentileDisc", "PercentileCont", "Quantile", "ApproxQuantile")
+
+
+def _top_n_or_multi_value(stmt: exp.Expression) -> set:
+    """Aggregates that return many rows' values in one cell (review 2, H5)."""
+    found = set()
+    for node in stmt.find_all(exp.Func):
+        cls = type(node).__name__
+        if cls in _TOP_N_CLASSES and (node.args.get("expressions") or node.args.get("count")):
+            found.add(f"{cls.lower()}(x, n)")
+        elif cls in _ARG_CLASSES and node.args.get("count"):
+            found.add(f"{_func_name(node)}(x, y, n)")
+        elif cls in _MULTI_QUANTILE_CLASSES or (isinstance(node, exp.Anonymous)
+                                                and ("quantile" in _func_name(node) or "percentile" in _func_name(node))):
+            for arg in node.iter_expressions():
+                if isinstance(arg, (exp.Array, exp.List)):
+                    found.add(f"{_func_name(node)}(array)")
+                    break
+    return found
+
+
+def _folding_attributes(stmt: exp.Expression) -> set:
+    names = set()
+    for col in stmt.find_all(exp.Column):
+        if col.table and _is_folding_attribute(col.name.lower()):
+            names.add(col.name.lower())
+    for dot in stmt.find_all(exp.Dot):
+        last = dot.expression
+        if isinstance(last, exp.Identifier) and _is_folding_attribute(str(last.this).lower()):
+            names.add(str(last.this).lower())
+    return names
 
 
 def _is_folding_name(name: str) -> bool:
     """Fail-closed naming rule (14 Nov 2026, H2): a function whose name ends in "agg" or contains "_agg" is treated as
-    row-folding, listed or not. "avg" does not match."""
-    return name.endswith("agg") or "_agg" in name
+    row-folding, listed or not. "avg" does not match. SQLite style names ending in "_group_array" or
+    "_group_object" are row-folding too (G1)."""
+    return (name.endswith("agg") or "_agg" in name
+            or name.endswith("_group_array") or name.endswith("_group_object"))
 
 
 # MySQL / MariaDB executable comments: the server runs their text (14 Nov 2026, H1). Checked on the raw SQL text,
 # before parsing, in every dialect; the marker inside a string literal is blocked too (accepted, fail-closed).
 _EXECUTABLE_COMMENT = re.compile(r"/\*[Mm]?!")
 
+# PostgreSQL unicode escapes U&"..." / U&'...' can spell any name, e.g. U&"pg\005fsleep" is pg_sleep (14 Nov 2026,
+# G3). Checked on the raw text before parsing, in every dialect; blocked outright (fail-closed).
+_UNICODE_ESCAPE = re.compile(r"[Uu]&['\"]")
+
 # T-SQL table hints that take or keep locks (14 Nov 2026, L2)
-_LOCKING_TABLE_HINTS = frozenset({"UPDLOCK", "XLOCK", "HOLDLOCK", "TABLOCKX"})
+_LOCKING_TABLE_HINTS = frozenset({"UPDLOCK", "XLOCK", "HOLDLOCK", "TABLOCKX",
+                                  "PAGLOCK", "TABLOCK", "SERIALIZABLE", "REPEATABLEREAD"})   # review 2, L2
+
+# Longer SQL is refused before parsing (review 2, L1): parsing megabytes takes seconds.
+MAX_SQL_BYTES = 100 * 1024
+
+# MySQL reads "--x" as minus-minus-x, not as a comment, and does not nest /* */ comments (review 2, M1). "--" without a
+# following space is blocked for dialect=None and "mysql" (also used for MariaDB; founder's decision, 14 Nov 2026);
+# a nested comment for dialect=None.
+_DASH_DASH_NO_SPACE = re.compile(r"--(?=\S)")
 
 # A table "name" with one of these characters is a file path or URL (DuckDB: SELECT * FROM '/etc/passwd') (M1)
-_PATH_CHARS = frozenset("/\\.:*?~")
+_PATH_CHARS = frozenset("/\\.:")   # "*", "?" and "~" removed: BigQuery wildcard tables `events_*` (review 2 false positive)
 
 _STRUCTURAL_FUNCS = ("Cast", "TryCast", "Paren")
 
@@ -163,6 +262,41 @@ def _function_qualifiers(stmt: exp.Expression) -> set:
             for part in parent.this.find_all(exp.Identifier):
                 names.add(str(part.this).lower())
     return names
+
+
+def _family_denied_functions(funcs: set, dialect: Optional[str]) -> set:
+    """Fail-closed rules for whole families of names, by dialect (``None`` = the generic reading, so every family).
+
+    DuckDB: any name starting with ``read_`` or ending in ``_scan`` reads files or other databases (review 2, H7).
+    PostgreSQL: pg_* / lo_* / txid_* / dblink* except PG_HARMLESS_FUNCTIONS. SQLite: sqlite_* except
+    SQLITE_HARMLESS_FUNCTIONS (D-115)."""
+    d = (dialect or "").lower()
+    found = set()
+    if d in ("", "duckdb"):
+        found |= {n for n in funcs if n.startswith("read_") or n.endswith("_scan")}
+    if d in ("", "postgres", "postgresql"):
+        found |= {n for n in funcs if n.startswith(PG_FUNCTION_FAMILIES) and n not in PG_HARMLESS_FUNCTIONS}
+        found |= {n for n in funcs if n == "http" or n.startswith(PG_EXTENSION_FAMILIES)}         # G4
+    if d in ("", "sqlite"):
+        found |= {n for n in funcs if n.startswith("sqlite_") and n not in SQLITE_HARMLESS_FUNCTIONS}
+        found |= {n for n in funcs if n.startswith("pragma_") and n not in SQLITE_SCHEMA_PRAGMAS}  # G2
+    return found
+
+
+def _family_denied_tables(refs: list, dialect: Optional[str]) -> set:
+    """pg_* tables (PostgreSQL) and sqlite_* tables (SQLite) are denied except the schema tables named above (D-115)."""
+    d = (dialect or "").lower()
+    found = set()
+    for ref in refs:
+        name = ref[2]
+        if d in ("", "postgres", "postgresql") and name.startswith("pg_") and name not in PG_SCHEMA_TABLES:
+            found.add(".".join(x for x in ref if x))
+        if d in ("", "sqlite") and name.startswith("sqlite_") and name not in SQLITE_SCHEMA_TABLES:
+            found.add(".".join(x for x in ref if x))
+        if d in ("", "sqlite") and ((name.startswith("pragma_") and name not in SQLITE_SCHEMA_PRAGMAS)
+                                    or name in SQLITE_DENIED_TABLES):                             # G2
+            found.add(".".join(x for x in ref if x))
+    return found
 
 
 def _function_names(stmt: exp.Expression) -> set:
@@ -306,9 +440,33 @@ def check_sql(sql: str, policy: SqlPolicy = SqlPolicy()) -> SqlVerdict:
         return SqlVerdict(False, "query too complex (blocked, fail-closed)", sql)
 
 
+def _nested_block_comment(sql: str) -> bool:
+    """True when a /* ... */ comment holds another "/*" (PostgreSQL nests comments, MySQL does not)."""
+    start = sql.find("/*")
+    while start != -1:
+        end = sql.find("*/", start + 2)
+        inner = sql.find("/*", start + 2)
+        if end == -1 or (inner != -1 and inner < end):
+            return end != -1
+        start = sql.find("/*", end + 2)
+    return False
+
+
 def _check_sql(sql: str, policy: SqlPolicy) -> SqlVerdict:
+    if len(sql) > MAX_SQL_BYTES or len(sql.encode("utf-8")) > MAX_SQL_BYTES:
+        return SqlVerdict(False, "query too long (blocked)", sql)
     if _EXECUTABLE_COMMENT.search(sql):
         return SqlVerdict(False, "MySQL/MariaDB executable comment /*! */ blocked (fail-closed)", sql)
+    if _UNICODE_ESCAPE.search(sql):
+        return SqlVerdict(False, "unicode-escaped identifier/string blocked (fail-closed)", sql)
+    if (policy.dialect or "").lower() in ("", "mysql") and _DASH_DASH_NO_SPACE.search(sql):
+        # MySQL/MariaDB read "--x" as minus-minus-x, not as a comment (founder's decision, 14 Nov 2026: mysql too)
+        return SqlVerdict(False, "'--' without a following space is read differently by MySQL (blocked; set "
+                                 "SqlPolicy(dialect=...) to your database)", sql)
+    if policy.dialect is None:
+        if _nested_block_comment(sql):
+            return SqlVerdict(False, "nested /* */ comment is read differently by MySQL and PostgreSQL (blocked; set "
+                                     "SqlPolicy(dialect=...) to your database)", sql)
     try:
         statements = [s for s in sqlglot.parse(sql, read=policy.dialect) if s is not None]
     except ParseError as e:
@@ -334,11 +492,21 @@ def _check_sql(sql: str, policy: SqlPolicy) -> SqlVerdict:
                 if locking:
                     return SqlVerdict(False, f"row-locking table hint blocked by read-only policy: {', '.join(locking)}",
                                       sql, stype)
+        # old T-SQL form without WITH: "FROM users (UPDLOCK)" - sqlglot 28.x reads it as a call users(UPDLOCK)
+        for table in stmt.find_all(exp.Table):
+            if isinstance(table.this, exp.Anonymous):
+                args = {a.name.upper() for a in table.this.expressions if isinstance(a, (exp.Column, exp.Var))}
+                locking = sorted(args & _LOCKING_TABLE_HINTS)
+                if locking:
+                    return SqlVerdict(False, f"row-locking table hint blocked by read-only policy: {', '.join(locking)}",
+                                      sql, stype)
 
     funcs = _function_names(stmt)
     bad_agg = funcs & CONCAT_AGGREGATES
     if not bad_agg:
         bad_agg = {n for n in funcs if _is_folding_name(n)}
+    if not bad_agg:
+        bad_agg = _folding_attributes(stmt) | _top_n_or_multi_value(stmt)
     if not bad_agg:
         # T-SQL FOR JSON / FOR XML turn a whole result into one value (14 Nov 2026, M1)
         for select in stmt.find_all(exp.Select):
@@ -361,8 +529,9 @@ def _check_sql(sql: str, policy: SqlPolicy) -> SqlVerdict:
     if bad_agg:
         return SqlVerdict(False, f"row-folding aggregate blocked (bulk extraction guard): {', '.join(sorted(bad_agg))}",
                           sql, stype)
-    denied_f = (funcs | _function_qualifiers(stmt)) & (DEFAULT_DENIED_FUNCTIONS
-                                                       | {f.lower() for f in policy.extra_denied_functions})
+    denied_f = ((funcs | _function_qualifiers(stmt)) & (DEFAULT_DENIED_FUNCTIONS
+                                                        | {f.lower() for f in policy.extra_denied_functions})
+                | _family_denied_functions(funcs, policy.dialect))
     if denied_f:
         return SqlVerdict(False, f"denied function(s): {', '.join(sorted(denied_f))}", sql, stype)
     if policy.allowed_functions is not None:
@@ -388,7 +557,8 @@ def _check_sql(sql: str, policy: SqlPolicy) -> SqlVerdict:
         refs.append(ref)
     deny = {t.lower() for t in policy.denied_tables} | DEFAULT_DENIED_TABLES
     denied = sorted({".".join(x for x in r if x) for r in refs if any(_entry_matches(e, r, dialect=None, bare_any=True)
-                                                                         for e in deny)})
+                                                                         for e in deny)}
+                    | _family_denied_tables(refs, policy.dialect))
     if denied:
         return SqlVerdict(False, f"denied table(s): {', '.join(denied)}", sql, stype)
     if policy.allowed_tables is not None:

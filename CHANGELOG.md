@@ -40,6 +40,8 @@ What the open core does today:
   passes. **httpx added to the `dev` extra** so the MCP compatibility tests run on a clean install.
 - **Tests:** regression tests for row-folding aggregates with LIMIT (Postgres `json_agg` / `jsonb_agg`).
 - SQL guard: blocks MySQL/MariaDB executable comments and more row-folding and table-dumping functions (internal AI-assisted review, 14 Nov 2026).
+- SQL guard: blocked more write, row-folding and file-reading functions, PostgreSQL attribute-notation aggregates and DuckDB top-N aggregates, SQLite virtual tables and pragma functions, unicode-escaped names, http/fdw extension calls (internal AI-assisted review, 14 Nov 2026).
+- SQL guard: PostgreSQL `pg_*` / `lo_*` / `txid_*` / `dblink*`, SQLite `sqlite_*` and DuckDB `read_*` / `*_scan` names are blocked as whole families, with a short named list of harmless exceptions; SQL over 100 KB is refused; with `dialect="mysql"` (also for MariaDB), `--` without a following space is refused (see README, Supported SQL dialects). README: database settings for the agent's user, each checked on PostgreSQL 16 and SQLite.
 - **Windows:** the first full test run on Windows found two gaps in the open core's tests (none in the library): the
   test that keeps the examples offline also blocked the loopback connection that every asyncio event loop makes on
   Windows, and the HTTP compatibility test sent its helper server's output to a pipe nobody read, so the server

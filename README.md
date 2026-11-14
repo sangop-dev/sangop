@@ -301,6 +301,8 @@ catches the common mistakes and the obvious attacks, but a deny-list of SQL func
 dialects differ. Use `SqlPolicy(allowed_functions=...)` for a strict allow-list, give the agent's database
 account no more rights than it needs, and treat a guard bypass as a bug to report (see `SECURITY.md`).
 
+SELECT-only grants are not enough: also set default_transaction_read_only = on for the agent's database user (PostgreSQL lets every role create large objects).
+
 Set a **`statement_timeout`** (and a row/memory limit) on the database account: Sangop blocks `WITH RECURSIVE` by
 default (`SqlPolicy(allow_recursive=True)` to allow it), but it cannot stop every query that is merely expensive,
 for example `SELECT count(*) FROM generate_series(1, 1000000000000)` or a large cartesian join.
@@ -312,6 +314,53 @@ has a regression test in `tests/test_security_regressions.py`. A re-review of 0.
 two partial (unknown custom objects, `ARRAY(subquery)` and `*_object_agg` folding) plus two small ones (configuration
 reads, denial of service); these are fixed in the same release and covered by `tests/test_reaudit_regressions.py`.
 This is an early release maintained by one person: treat it as an aid, not an assurance.
+
+### Database settings for the agent's user
+
+Each line below was checked on PostgreSQL 16.15 and on Python 3.13 with SQLite 3.53 (14 Nov 2026, synthetic data).
+
+PostgreSQL:
+
+- Grant `SELECT` only on the tables (or columns) the agent needs. Never give the agent's user `pg_read_all_data`
+  (it reads every table without a `GRANT`) or `pg_read_all_stats` (it shows other sessions' query texts).
+- `ALTER ROLE agent SET default_transaction_read_only = on;` makes writes such as `lo_creat()` fail. It is a default,
+  not a lock: the session can switch it off with `SET default_transaction_read_only = off` or
+  `set_config('default_transaction_read_only', 'off', false)` (Sangop blocks both: only `SELECT` passes and
+  `set_config` is denied). Switching it off inside a running transaction fails ("must be set before any query").
+  `pg_logical_emit_message()` and `txid_current()` still run under it; Sangop denies them.
+- `REVOKE EXECUTE ON FUNCTION set_config(text, text, boolean) FROM PUBLIC;` stops `set_config()` but not the `SET`
+  command, and it also affects every other application that uses the same database.
+- `ALTER ROLE agent SET statement_timeout = '5s';`, `... SET lock_timeout = '1s';` and
+  `... SET idle_in_transaction_session_timeout = '30s';` (pick your own values). The guard does not stop a query
+  that is merely heavy, such as `count(*)` over a cross join of five tables; the timeout cancels it.
+
+SQLite:
+
+- Open the database read-only: `sqlite3.connect("file:shop.db?mode=ro", uri=True)`; writes then fail. `ATTACH` can
+  still create a new database file on such a connection (Sangop blocks `ATTACH`).
+- `PRAGMA query_only = ON` and `PRAGMA trusted_schema = OFF`. The same connection can switch `query_only` off again
+  with another `PRAGMA` (Sangop blocks `PRAGMA` statements).
+- `conn.enable_load_extension(False)` where your Python build has it; in Python's `sqlite3` loading extensions is
+  already off by default.
+
+### Supported SQL dialects
+
+Tested in depth: PostgreSQL and SQLite. Experimental: MySQL/MariaDB, DuckDB, SQL Server (T-SQL), Oracle and others. For experimental dialects, always set allowed_tables and an allowed_functions allow-list; we fix reported gaps in point releases.
+
+Always set SqlPolicy(dialect=...) to the database you run; the default (None) is a generic reading and can differ from MySQL/SQLite on comments.
+For MariaDB use `dialect="mysql"`.
+
+For PostgreSQL and SQLite (and for the default `dialect=None`) whole families of system names are blocked, so a new
+system function is refused before anyone lists it: functions starting with `pg_`, `lo_`, `txid_` or `dblink`, and
+tables starting with `pg_`, except `pg_typeof`, `pg_size_pretty`, `pg_column_size` and the schema tables `pg_tables`,
+`pg_views`, `pg_indexes`, `pg_class`, `pg_namespace`, `pg_attribute`, `pg_type` (and `information_schema`, except
+`user_mapping_options`); functions and tables starting with `sqlite_`, except `sqlite_version`, `sqlite_source_id`,
+`sqlite_compileoption_used` and the tables `sqlite_master`, `sqlite_schema`, `sqlite_temp_master` and
+`sqlite_temp_schema`; SQLite `pragma_` functions and tables, except `pragma_table_info`, `pragma_table_xinfo`,
+`pragma_index_list`, `pragma_index_info` and `pragma_foreign_key_list`, and the `dbstat` table. PostgreSQL also
+blocks functions starting with `postgres_fdw` or `http_`, and `http`. For DuckDB (and `dialect=None`), functions
+starting with `read_` or ending in `_scan` are blocked. A unicode-escaped name or string (`U&"..."`, `U&'...'`) is
+blocked in every dialect.
 
 ### Who maintains it, and how
 
@@ -426,6 +475,9 @@ the tests and the speed benchmark are all here. Run them, and try to break it ([
 - **Rules plugins can change detection.** Any installed package that registers a `sangop.plugins` entry point can
   replace the active rule set, including with weaker rules. Install only plugins you trust (as with any Python
   package) and check `sangop selftest`, which prints the active rule set (`"rules": "basic"` without a plugin).
+- The SQL guard does not stop a query that is merely heavy (for example `count(*)` over a cross join of five
+  tables); set `statement_timeout`, `lock_timeout` and `idle_in_transaction_session_timeout` on the database user.
+- Wide self-joins or column pivots can still return many values per row within the LIMIT; keep allowed_tables narrow and database timeouts on.
 - The SQL guard is deny-list based for functions; MySQL/MariaDB executable comments (/*! */) are blocked outright. Database-user permissions remain the primary defence (see Security model).
 - SQL checks assume the right `dialect` is set in `SqlPolicy`; a statement the chosen dialect cannot parse is
   blocked, one it parses differently from your database may not be judged as your database reads it.
