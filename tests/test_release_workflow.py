@@ -1,6 +1,7 @@
-"""The PyPI release workflow (inactive until the maintainer renames it to release.yml) must build from the public
-repository it runs in, refuse packages that carry a private file, wait for a human approval and use trusted
-publishing (no token). Written first, 13 Nov 2026. Synthetic packages only; nothing is built or uploaded."""
+"""The PyPI release workflow must build from the public repository it runs in, refuse packages that carry a private
+file, wait for a human approval and use trusted publishing (no token). Written first, 13 Nov 2026. Since 15 Nov 2026
+it is active in the public repository as .github/workflows/release.yml; the private drafts keep the .disabled copy.
+Synthetic packages only; nothing is built or uploaded."""
 import io
 import subprocess
 import sys
@@ -12,7 +13,8 @@ import pytest
 
 yaml = pytest.importorskip("yaml")
 ROOT = Path(__file__).resolve().parent.parent
-CANDIDATES = [ROOT / ".github" / "workflows" / "release.yml.disabled",
+CANDIDATES = [ROOT / ".github" / "workflows" / "release.yml",
+              ROOT / ".github" / "workflows" / "release.yml.disabled",
               ROOT / "github_drafts" / "workflows" / "release.yml.disabled"]
 WORKFLOW = next((p for p in CANDIDATES if p.is_file()), None)
 pytestmark = pytest.mark.skipif(WORKFLOW is None, reason="release workflow file not found")
@@ -91,17 +93,39 @@ def test_publish_waits_for_approval_and_uses_trusted_publishing():
     assert trigger == {"push": {"tags": ["v*"]}}
 
 
-def test_only_ci_is_active():
+def test_public_workflows_are_ci_and_release():
     """Private repository: nothing in the drafts folder is active and there is no live .github folder.
-    Public repository: .github/workflows holds the active ci.yml and the still-disabled release workflow only,
-    and no .github/README.md (GitHub would show it instead of README.md)."""
+    Public repository: .github/workflows holds exactly the active ci.yml and release.yml, nothing disabled, and no
+    .github/README.md (GitHub would show it instead of README.md)."""
     drafts = ROOT / "github_drafts" / "workflows"
     if drafts.is_dir():
         assert not list(drafts.glob("*.yml")) and not list(drafts.glob("*.yaml"))
         assert (drafts / "ci.yml.disabled").exists()
+        assert (drafts / "release.yml.disabled").exists()
         assert not (ROOT / ".github").exists()
     else:
         wf = ROOT / ".github" / "workflows"
-        assert sorted(p.name for p in wf.iterdir() if p.suffix in (".yml", ".yaml")) == ["ci.yml"]
-        assert (wf / "release.yml.disabled").exists()
+        assert sorted(p.name for p in wf.iterdir() if p.suffix in (".yml", ".yaml")) == ["ci.yml", "release.yml"]
+        assert not list(wf.glob("*.disabled"))
         assert not (ROOT / ".github" / "README.md").exists()
+
+
+EXPORT_SCRIPT = ROOT / "scripts" / "make_public_export.py"
+
+
+@pytest.mark.skipif(not EXPORT_SCRIPT.is_file(), reason="private repository only")
+def test_export_publishes_both_workflows_active():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("make_public_export", EXPORT_SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    published = dict((dst, src) for src, dst in mod.plan(ROOT))
+    assert published[".github/workflows/ci.yml"] == "github_drafts/workflows/ci.yml.disabled"
+    assert published[".github/workflows/release.yml"] == "github_drafts/workflows/release.yml.disabled"
+    assert not [d for d in published if d.startswith(".github/") and d.endswith(".disabled")]
+
+
+def test_release_workflow_header_says_it_is_active_in_public():
+    head = "\n".join(WORKFLOW.read_text(encoding="utf-8").splitlines()[:6])
+    assert "INACTIVE" not in head
+    assert "release.yml" in head

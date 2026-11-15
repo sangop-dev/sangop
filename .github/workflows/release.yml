@@ -1,6 +1,5 @@
-# INACTIVE: GitHub runs only .yml/.yaml files, and this one ends in .disabled. To turn releases on (maintainer's
-# decision): create the "pypi" environment with required reviewers, register this repository as a trusted
-# publisher on PyPI, then rename this file to release.yml.
+# Active in the public repository: the public export publishes this file as .github/workflows/release.yml
+# (D-122, 15 Nov 2026). In the private repository it keeps the .disabled ending and never runs.
 # Builds from the public repository it runs in (never from a private copy) and refuses packages that carry a
 # private file. Publishes to PyPI with Trusted Publishing (OpenID Connect): no PyPI password or API token is stored anywhere.
 # Runs only when a version tag such as v0.1.4 is pushed, and the upload waits for a human approval on the
