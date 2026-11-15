@@ -526,6 +526,8 @@ the tests and the speed benchmark are all here. Run them, and try to break it ([
 - Wide self-joins or pivots that list their values can still return many values per row within the LIMIT; keep allowed_tables narrow and database timeouts on.
 - For PostgreSQL, SQLite and `dialect=None` the SQL guard accepts only functions on its default allow-list plus the names you add; it judges a function by its name, so a name you add is trusted as you added it (the backstop rules still apply). For the other dialects it is deny-list based for functions. MySQL/MariaDB executable comments (/*! */) are blocked outright. Database-user permissions remain the primary defence (see Security model).
 - `generate_series` is on the default allow-list; a very large range is a heavy query, so keep the database timeouts above.
+- Nested string functions (for example replace inside replace, encode, hex) can build very large values; Sangop does not cap value size, so keep statement_timeout on for the agent's database user.
+- A percentile fraction given as a bind parameter ($1) is checked only by its form; the application must supply a plain number.
 - Function arguments that look like SQL text (e.g. 'SELECT …') are refused, except as arguments of common string and date functions (coalesce, replace, concat, lower …), because several database functions run such text as a query.
 - Text assembled at run time (for example 'SEL' || 'ECT …' or concat(...)) is not recognised as a query; functions that run text are blocked by name, and database-user permissions remain the main defence.
 - SQL checks assume the right `dialect` is set in `SqlPolicy`; a statement the chosen dialect cannot parse is

@@ -45,6 +45,7 @@ What the open core does today:
 - SQL guard: blocked PostgreSQL crosstab/xpath_table, DuckDB serialized-SQL execution and dynamic PIVOT (row-folding), plus more system tables (internal AI-assisted review 3, 14 Nov 2026)
 - SQL guard: PostgreSQL and SQLite now use a default function allow-list; unknown functions are refused unless added via extra_allowed_functions (internal AI-assisted review 4, 15 Nov 2026).
 - SQL guard: percentile functions only take a plain number as the fraction; format() width is limited; names are checked as written (internal AI-assisted review 5, 15 Nov 2026).
+- SQL guard: schema-qualified calls (pg_catalog., main.) are checked like plain names; sha2 functions allowed; nested-value and bind-parameter limits documented (internal AI-assisted review 6, 15 Nov 2026).
 - **Windows:** the first full test run on Windows found two gaps in the open core's tests (none in the library): the
   test that keeps the examples offline also blocked the loopback connection that every asyncio event loop makes on
   Windows, and the HTTP compatibility test sent its helper server's output to a pipe nobody read, so the server

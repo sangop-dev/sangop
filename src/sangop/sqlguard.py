@@ -548,6 +548,7 @@ _ALLOWED_PG_ONLY = frozenset({
     "array_positions", "array_remove", "array_replace", "array_append", "array_prepend", "array_cat",
     "json_array_elements", "json_array_elements_text", "jsonb_array_elements", "jsonb_array_elements_text",
     "json_each", "json_each_text", "jsonb_each", "jsonb_each_text", "json_object_keys", "jsonb_object_keys",
+    "sha224", "sha256", "sha384", "sha512",                                      # review 6, L2: one value each
     "json_array",                    # PostgreSQL 16 JSON_ARRAY(a, b): JSON_ARRAY(SELECT ...) stays row-folding (run4 H1)
     "date_bin", "age", "make_date", "make_time", "make_timestamp", "make_timestamptz", "make_interval", "isfinite",
     "justify_days", "justify_hours", "justify_interval", "array_position", "to_tsvector", "to_tsquery",
@@ -618,8 +619,85 @@ def _qualifier(node: exp.Func) -> Optional[str]:
     return None
 
 
+_MAX_REPARSED_CALLS = 200
+
+
+def _strip_builtin_schema(stmt: exp.Expression, dialect: Optional[str]) -> exp.Expression:
+    """Remove a pg_catalog. qualifier (main. for SQLite) from function calls, so that every rule - deny-list,
+    family rules, row-folding, text-query, size limits, allow-list - sees the plain name (review 6, M1:
+    pg_catalog.lpad('x', 260000000) passed the lpad length limit). Another schema stays: it is the user's own."""
+    d = (dialect or "").lower()
+    builtin = ({"pg_catalog"} if d in PG_LIKE_DIALECTS else set()) | ({"main"} if d in ("", "sqlite") else set())
+    if not builtin:
+        return stmt
+
+    budget = [_MAX_REPARSED_CALLS]
+
+    def plain(func: exp.Expression) -> exp.Expression:
+        if not isinstance(func, exp.Anonymous):
+            return func
+        name = _func_name(func)
+        node: exp.Expression = exp.Anonymous(this=name, expressions=list(func.expressions))
+        budget[0] -= 1
+        try:                                       # the node sqlglot builds for the plain name (Pad, Format, ...)
+            if budget[0] < 0:                      # past the budget the plain unknown call is kept (each rule
+                raise ValueError("budget")         # also reads names); this only avoids re-parsing work
+            args = ", ".join(a.sql(dialect=dialect) for a in func.expressions)
+            parsed = sqlglot.parse_one(f"{name}({args})", read=dialect)
+            if isinstance(parsed, exp.Func):
+                node = parsed
+        except Exception:
+            pass
+        for part in node.walk():                    # positions would point into another text
+            for key in ("line", "col", "start", "end"):
+                part.meta.pop(key, None)
+        node.meta[_WRITTEN_KEY] = name
+        return node
+
+    for _ in range(5):                              # a re-parsed call can hold another qualified call
+        if not _strip_once(stmt, builtin, plain):
+            break
+    return stmt
+
+
+def _strip_once(stmt: exp.Expression, builtin: set, plain) -> bool:
+    swaps = []                                      # (old node, new node); applied per parent list in one go
+    for dot in list(stmt.find_all(exp.Dot)):
+        qual = dot.this
+        last = qual.name if isinstance(qual, (exp.Identifier, exp.Dot)) else None
+        if last and last.lower() in builtin and isinstance(dot.expression, exp.Func):
+            swaps.append((dot, plain(dot.expression)))
+    for col in list(stmt.find_all(exp.Column)):
+        table = col.args.get("table")
+        inner = col.this
+        if (isinstance(table, exp.Identifier) and table.name.lower() in builtin
+                and isinstance(inner, exp.Expression) and not isinstance(inner, exp.Identifier)):
+            if isinstance(inner, exp.Anonymous):
+                inner = plain(inner)
+            elif isinstance(inner.args.get("this"), exp.Anonymous):     # pg_catalog.f(...) WITHIN GROUP / OVER
+                inner.set("this", plain(inner.this))
+            swaps.append((col, inner))
+    if not swaps or any(old is stmt for old, _ in swaps):
+        return False
+    # node.replace() re-parents the whole sibling list each time (quadratic on thousands of calls), so each
+    # parent's argument is rebuilt once
+    by_slot: dict = {}
+    for old, new in swaps:
+        by_slot.setdefault((id(old.parent), old.arg_key), (old.parent, old.arg_key, {}))[2][id(old)] = new
+    for parent, key, news in by_slot.values():
+        value = parent.args.get(key)
+        if isinstance(value, list):
+            parent.set(key, [news.get(id(item), item) for item in value])
+        elif value is not None and id(value) in news:
+            parent.set(key, news[id(value)])
+    return True
+
+
 def _pad_too_long(node: exp.Func) -> bool:
-    length = node.args.get("expression")
+    if isinstance(node, exp.Anonymous):                # lpad(text, length[, fill]) kept as an unknown call
+        length = node.expressions[1] if len(node.expressions) > 1 else None
+    else:
+        length = node.args.get("expression")
     if isinstance(length, exp.Literal) and not length.is_string:
         try:
             return int(str(length.this)) > _MAX_PAD_LENGTH
@@ -656,10 +734,15 @@ def _written_in_sql(node: exp.Func, sql: Optional[str], dialect: Optional[str]) 
     return _written_from_text(node, sql) or _written_name(node, dialect) or _func_name(node)
 
 
+_WRITTEN_KEY = "sangop_written_name"
+
+
 def _written_from_text(node: exp.Func, sql: Optional[str]) -> Optional[str]:
     """The name of a typed call as it stands in the query text, or None when it cannot be found there."""
     if isinstance(node, exp.Anonymous):
         return _func_name(node)
+    if node.meta and node.meta.get(_WRITTEN_KEY):           # set when a pg_catalog. / main. prefix was removed
+        return node.meta[_WRITTEN_KEY]
     if sql:
         meta = node.meta or {}
         start, end = meta.get("start"), meta.get("end")
@@ -740,7 +823,7 @@ def _size_refusal(stmt: exp.Expression, extra: set, sql: Optional[str], dialect:
         names = _node_names(node) | {_written_in_sql(node, sql, dialect)}
         if names & extra:
             continue
-        if "pad" in names and _pad_too_long(node):
+        if names & {"pad", "lpad", "rpad"} and _pad_too_long(node):
             return "lpad/rpad length must be a literal number up to 1000 (blocked: a longer value uses a lot of memory)"
         if type(node).__name__ == "Format" or (isinstance(node, exp.Anonymous) and _func_name(node) == "format"):
             first = (node.expressions[0] if node.expressions else None) if isinstance(node, exp.Anonymous) else node.this
@@ -769,9 +852,11 @@ def _functions_outside(stmt: exp.Expression, allow: set, extra: set,
             # the name as written decides (review 5, L1): sqlglot turns names a database may not have (array_join,
             # year, ucase, ...) into nodes whose own names are on the list
             ok = written in allow
+        elif isinstance(node, exp.Anonymous):
+            ok = bool(names & allow)              # sqlglot's own names are never written names (review 6)
         else:
             ok = bool(names & (allow | node_names))
-            if not ok and not isinstance(node, exp.Anonymous):
+            if not ok:
                 rendered = _written_name(node, dialect)  # sqlglot's own name can differ (j_s_o_n_object)
                 ok = bool(rendered) and rendered in allow
         if not ok and not qual:
@@ -957,7 +1042,7 @@ def _check_sql(sql: str, policy: SqlPolicy) -> SqlVerdict:
         return SqlVerdict(False, f"unparseable SQL (blocked, fail-closed): {str(e).splitlines()[0]}", sql)
     if len(statements) != 1:
         return SqlVerdict(False, f"expected exactly 1 statement, got {len(statements)}", sql)
-    stmt = statements[0]
+    stmt = _strip_builtin_schema(statements[0], policy.dialect)
     stype = type(stmt).__name__.upper()
 
     if policy.read_only:
