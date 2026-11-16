@@ -1,11 +1,13 @@
 """D-063: find_all must stay roughly linear on long text with very many findings (it was O(n^2): ~9 s for 20,000 phones)."""
+import sys
 import time
 
 import pytest
 
 from sangop import find_all, scrub_text  # noqa: F401
 
-LIMIT_SECONDS = 1.5   # generous for slow CI machines; the old code needed ~9 s on this input
+# Windows CI and laptops are much slower; the Linux limit stays the real gate.
+LIMIT_SECONDS = 1.5 * (3 if sys.platform == "win32" else 1)   # the old code needed ~9 s on this input
 
 
 def _timed(text):

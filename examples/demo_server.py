@@ -30,7 +30,8 @@ def build_fake_db() -> None:
         base = f"2{i:010d}"
         aadhaar = base + verhoeff_check_digit(base)
         con.execute("INSERT INTO customers VALUES (?,?,?,?,?,?)", (
-            i, 1 + i % 3, f"Test Customer {i}", f"98765{i:05d}", "ABCPE1234F",
+            i, 1 + i % 3, f"Test Customer {i}", f"98765{i:05d}",
+            "QZX" + "P" + chr(65 + i % 26) + f"{5000 + i:04d}" + chr(90 - i % 26),   # invented PAN-shaped value
             f"Refund pending. I am sharing my aadhaar {aadhaar} for verification.",
         ))
     con.commit()

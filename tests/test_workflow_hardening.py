@@ -94,15 +94,26 @@ def test_ci_runs_pinned_pip_audit_and_bandit():
     assert re.search(r"bandit -r src\b", text)
 
 
-def test_dependabot_watches_pip_and_actions_weekly_with_a_small_pr_limit():
+def test_dependabot_watches_pip_and_actions_monthly_with_a_small_pr_limit():
     assert DEPENDABOT is not None
     cfg = _load(DEPENDABOT)
     assert cfg["version"] == 2
     by_eco = {u["package-ecosystem"]: u for u in cfg["updates"]}
     assert set(by_eco) == {"pip", "github-actions"}
     for u in by_eco.values():
-        assert u["schedule"]["interval"] == "weekly"
+        assert u["schedule"]["interval"] == "monthly"
         assert 1 <= u["open-pull-requests-limit"] <= 5
+
+
+def test_dependabot_groups_minor_and_patch_updates_into_one_pr():
+    assert DEPENDABOT is not None
+    for u in _load(DEPENDABOT)["updates"]:
+        groups = u.get("groups")
+        assert groups, u["package-ecosystem"]
+        grp = next(iter(groups.values()))
+        assert len(groups) == 1
+        assert grp["patterns"] == ["*"]
+        assert sorted(grp["update-types"]) == ["minor", "patch"]
 
 
 def test_dependabot_has_no_labels_and_ignores_major_versions():

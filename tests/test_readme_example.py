@@ -42,4 +42,4 @@ def test_readme_example_output_is_what_the_code_prints(tmp_path):
 def test_readme_example_is_short_and_synthetic():
     code = _block(README.read_text(encoding="utf-8"), "readme-example:code")
     assert len(code.strip().splitlines()) <= 15
-    assert "ABCPE1234F" in code          # the project's documented synthetic PAN
+    assert "999941057058" in code and "UIDAI's published test UID" in code   # not a person's number (TASK-041)

@@ -34,6 +34,11 @@ def fake_aadhaar(i: int) -> str:
     return base + verhoeff_check_digit(base)
 
 
+def fake_pan(i: int) -> str:
+    """An invented PAN-shaped value for customer i, made at run time (no PAN is written in this file)."""
+    return "QZX" + "P" + chr(65 + i % 26) + f"{5000 + i:04d}" + chr(90 - i % 26)
+
+
 def db_path() -> str:
     return os.environ.get("SANGOP_QS_DB") or os.path.join(tempfile.gettempdir(), "sangop_quickstart.db")
 
@@ -46,7 +51,7 @@ def build_fake_db(path: str | None = None) -> str:
                 "pan TEXT, email TEXT, aadhaar TEXT)")
     for i in range(1, N_CUSTOMERS + 1):
         con.execute("INSERT INTO customers VALUES (?,?,?,?,?,?,?)",
-                    (i, 1 + i % 3, f"Test Customer {i}", f"98765{i:05d}", "ABCPE1234F",
+                    (i, 1 + i % 3, f"Test Customer {i}", f"98765{i:05d}", fake_pan(i),
                      f"customer{i}@example.com", fake_aadhaar(i)))
     con.execute("DROP TABLE IF EXISTS notes")
     con.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)")

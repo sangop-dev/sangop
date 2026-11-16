@@ -19,7 +19,7 @@ pip install sangop             # "sangop[fastmcp]" for the FastMCP integration
 **Tested on:** Linux with Python 3.10, 3.11, 3.12 and 3.13, and Windows 10 with Python 3.12 (the maintainer's
 laptop). Windows is not in automated CI yet; the CI workflow runs Linux and Windows once the repository is public.
 
-## Before and after (invented values)
+## Before and after
 
 <!-- readme-example:code -->
 ```python
@@ -29,9 +29,10 @@ sangop.configure(ledger_path="demo_audit.db")   # local audit ledger; no network
 
 @sangop.guard(purpose="support", sql_param="query")
 def run_query(query: str) -> list[dict]:
-    return [{"id": 7, "pan": "ABCPE1234F", "phone": "9876543210"}]   # your real DB call; invented row
+    # your real DB call goes here; 999941057058 is UIDAI's published test UID, not a person's number
+    return [{"id": 7, "aadhaar": "999941057058"}]
 
-print(run_query("SELECT id, pan, phone FROM customers WHERE id = 7 LIMIT 1"))
+print(run_query("SELECT id, aadhaar FROM customers WHERE id = 7 LIMIT 1"))
 try:
     run_query("DELETE FROM users")
 except sangop.SangopBlocked as e:
@@ -40,15 +41,15 @@ except sangop.SangopBlocked as e:
 
 <!-- readme-example:output -->
 ```text
-[{'id': 7, 'pan': '[PII_PAN_6377c72335a5733d]', 'phone': '[PII_PHONE_IN_0fa10752bcd92ccd]'}]
+[{'id': 7, 'aadhaar': '[PII_AADHAAR_8bd40a00a823b4c5]'}]
 Sangop blocked this query: write/DDL statement blocked by read-only policy (DELETE)
 $ sangop audit verify --db demo_audit.db
 OK (unkeyed): 3 event(s) checked. Ledger is UNKEYED (plain SHA-256 chain, no SANGOP_LEDGER_KEY): edits that recompute the chain and cut-off last rows (truncation) are NOT detected.
-anchor: 3:1776e4b2aa53bbc3d1459f310bb67eedf85ea62516f6f3be0923c65a4b2e438f
+anchor: 3:932dccc86c1429cf7924cb5ced927d353422a30cd4e35c325d5723a89fc53332
 (keep a copy of the anchor where the ledger's writer cannot change it; pass it as --anchor next time)
 ```
 
-The agent gets tokens instead of the PAN and phone number, the `DELETE` never reaches the database, and the audit
+The agent gets a token instead of the Aadhaar number, the `DELETE` never reaches the database, and the audit
 ledger checks out. Set `SANGOP_LEDGER_KEY` (see `sangop keygen`) to make the ledger an HMAC chain.
 
 ## What it does by default
@@ -152,7 +153,7 @@ What happens on each call:
    values are put back, and blocked if it no longer passes (the tool never receives SQL the guard did not check).
    Use `sql_mode="shadow"` to only log. This is a **second layer**: see "Security model" below.
 2. **PII/secret scrubbing** - the result is scrubbed before the model sees it:
-   `ABCPE1234F` -> `[PII_PAN_3f9a12c04b7d51e8]`. Modes: `tokenize` (reversible,
+   a PAN (shown here masked as `ABXXXXXX4F`) -> `[PII_PAN_3f9a12c04b7d51e8]`. Modes: `tokenize` (reversible,
    default), `redact`, `shadow` (log only; the original object is returned). Strings, bytes, dict keys and values,
    lists/tuples/sets, dataclasses, pydantic models, plain objects, generators (item by item) and exception
    messages are all scrubbed (bytes only when they are not media, see item 3). A lazy iterable **nested inside** a result (a generator, `map`, `zip`, `filter`,
@@ -278,7 +279,7 @@ How to read these numbers:
   becomes a development set. Holdouts 1-3 and 5-7 have been used that way, so their numbers are an upper bound. Holdout
   4 is a "known limits" set that is only scored.
 - **Where the open core's precision is lower, it is mostly partial masks, not false alarms.** For example a phone
-  number written `0091 98765 43210` is masked as `98765 43210` (the sensitive part is masked, the prefix is not), and
+  number written `0091 98XXX XXX10` is masked as `98XXX XXX10` (the sensitive part is masked, the prefix is not), and
   strict scoring counts that as one wrong and one missed value. Masks that touch no real value at all are no more
   frequent in the open core than with Pro on any of the eight sets.
 - **Holdout 4 recall is low for both** because most of its values are kinds Sangop does not detect at all: person
@@ -422,15 +423,17 @@ the tests and the speed benchmark are all here. Run them, and try to break it ([
 - **Basic rules only: ASCII digits and the common written forms (measured on 5 Nov 2026 with synthetic values).**
   Found: an Aadhaar as 12 digits or as 4-4-4 groups with one space or one hyphen; an Indian mobile as 10 digits or as
   5-5 groups with one space or one hyphen, optionally after `+91`, `91` or `0`; a card with one space or one hyphen
-  between groups. **Not found by the open core:**
-  - digits written in an Indian script (for example Devanagari `२३४५ ६७८९ ०१२४`) - only `0`-`9` are read;
+  between groups. **Not found by the open core** (example values below are shown masked: first 2 and last 2
+  characters, X in between):
+  - digits written in an Indian script (for example an Aadhaar in Devanagari digits, `२३XX XXXX XX२४`) - only
+    `0`-`9` are read;
   - any other separator between groups: a dot, two spaces, a tab, a no-break or thin space, an en dash, a slash, a
-    newline (`2345.6789.0124`, `98765\u00a043210`, `4111.1111.1111.1111`);
-  - a mobile number as 4-6 or 3-3-4 groups (`9876 543210`, `987 654 3210`), with a dot (`98765.43210`), glued to letters
-    (`ph9876543210`), or with brackets (`(+91) 98765 43210` - the 10 digits are masked, the prefix is not; the same
-    for `0091 98765 43210`);
-  - an Aadhaar glued to letters or digits (`xx234567890124`), or next to another 4-digit group (`2345 6789 0124 2026`):
-    neither is masked;
+    newline (`23XX.XXXX.XX24`, `98XXX\u00a0XXX10`, `41XX.XXXX.XXXX.XX11`);
+  - a mobile number as 4-6 or 3-3-4 groups (`98XX XXXX10`, `98X XXX XX10`), with a dot (`98XXX.XXX10`), glued to
+    letters (`ph98XXXXXX10`), or with brackets (`(+91) 98XXX XXX10` - the 10 digits are masked, the prefix is not;
+    the same for `0091 98XXX XXX10`);
+  - an Aadhaar glued to letters or digits (`xx23XXXXXXXX24`), or next to another 4-digit group
+    (`23XX XXXX XX24 2026`): neither is masked;
   - a UPI ID at a handle that is not in the built-in list, unless the word "UPI" or "VPA" stands just before it (the
     Hindi word for UPI does not count).
 
@@ -467,18 +470,19 @@ the tests and the speed benchmark are all here. Run them, and try to break it ([
   checks the text as it is; it does not decode it first. Measured on synthetic values on 26 Oct 2026: a PAN with a
   zero-width space, a base64 PAN, a URL-encoded e-mail and an HTML-entity PAN or e-mail were all missed.
 - **Other written forms the open core does not find** (measured on synthetic values on 5 Nov 2026): a PAN, GSTIN or
-  IFSC in lower case (`abcpe1234f`); a PAN with a space inside (`ABCPE 1234F`); a value with a combining mark inside
+  IFSC in lower case (`abXXXXXX4f`); a PAN with a space inside (`ABXXX XXX4F`); a value with a combining mark inside
   (for example an accent, U+0301, after one of its letters or digits); values written with JSON `\u` escapes in raw
-  JSON text (`\u0039876543210`); e-mail addresses with a non-ASCII (IDN) domain, a full-width `＠` or `[at]` instead
-  of `@`; letters or digits written in full-width form (`ＡＢＣＰＥ１２３４Ｆ`).
+  JSON text (a mobile number whose first digit is written as `\u0039`); e-mail addresses with a non-ASCII (IDN)
+  domain, a full-width `＠` or `[at]` instead of `@`; letters or digits written in full-width form (a PAN in
+  full-width letters and digits).
 - Names and addresses without a pattern are **not** detected.
 - Bank account numbers are not detected (too generic without context).
 - Phone detection can flag other 10-digit numbers starting 6-9, including order, invoice or transaction IDs such as
-  `ord-6407135664`, `inv_8161570948`, `txn#8855460850` (ten digits after a letter prefix and a `-`, `_` or `#`).
-  Ten digits glued directly to letters (`INV9876543210`) are not flagged.
+  `ord-64XXXXXX64`, `inv_81XXXXXX48`, `txn#88XXXXXX50` (ten digits after a letter prefix and a `-`, `_` or `#`).
+  Ten digits glued directly to letters (`INV98XXXXXX10`) are not flagged.
 - A UPI ID is recognised when its handle is a well-known one (a built-in list, not exhaustive, may be out of date) or
   when the word "UPI" or "VPA" appears just before it. An unknown handle with no such hint is **not** reported as UPI
-  (a phone-style ID like `9876543210@newapp` is then reported as a phone number).
+  (a phone-style ID like `98XXXXXX10@newapp` is then reported as a phone number).
 - A card or other digit run is treated as a card only when it is not glued to letters, and a 13-digit
   number starting 978 or 979 (an ISBN-13) is never treated as a card.
 - Tokens live in process memory and can be reversed only by the process that made them; with several
@@ -563,6 +567,15 @@ to PII-kind allowances, safeguard mapping). A tiny **example** pack ships inside
 try the loader: `sangop.load_pack(sangop.example_pack_path())` (`pip install "sangop[policy]"`). It
 is marked EXAMPLE ONLY and is not legal advice. It does not tell you what you must do, and using it
 does not make anyone compliant.
+
+## Stability and versioning
+
+Versions are dates (CalVer `YYYY.MM.N`): `2026.11.0` is the first release of November 2026.
+- One release a month. Between releases, a patch release (`.1`, `.2`, ...) is made only for a security fix or a real bug.
+- The stable public API is what this README shows: the Python functions and decorator in the examples above and the
+  `sangop` CLI commands. Anything else (internal modules, names starting with `_`) can change without notice.
+- Removing or changing a stable feature: first one release with a deprecation warning, then removal in a later release.
+- Every change is listed in [CHANGELOG.md](CHANGELOG.md); security fixes follow [SECURITY.md](SECURITY.md).
 
 ## Security
 

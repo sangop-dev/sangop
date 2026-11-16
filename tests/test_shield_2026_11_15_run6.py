@@ -103,8 +103,10 @@ def test_m1_nested_qualified_calls(sql, word, dialect):
 
 
 def test_m1_many_qualified_calls_stay_fast():
+    import sys
     import time
     sql = "SELECT " + ", ".join(f"pg_catalog.lower(c{i})" for i in range(3000)) + " FROM t LIMIT 1"
     start = time.perf_counter()
     assert check_sql(sql, SqlPolicy(dialect="postgres")).allowed is True
-    assert time.perf_counter() - start < 5
+    # Windows CI and laptops are much slower; the Linux limit stays the real gate.
+    assert time.perf_counter() - start < 5 * (3 if sys.platform == "win32" else 1)

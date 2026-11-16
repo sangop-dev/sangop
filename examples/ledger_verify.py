@@ -9,7 +9,7 @@ sangop.configure(ledger_path=os.path.join(tempfile.mkdtemp(), "audit.db"), ledge
 
 @sangop.guard(purpose="notes")
 def read_note(note_id: int) -> str:
-    return f"note {note_id}: customer PAN ABCPE1234F called about a refund"
+    return f"note {note_id}: customer with Aadhaar 999941057058 called about a refund"   # UIDAI's published test UID
 
 print(read_note(1))
 report = sangop.get_ledger().verify_report()

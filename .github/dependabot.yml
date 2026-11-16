@@ -1,22 +1,31 @@
-# Once a week, opens pull requests for newer versions of the Python dependencies in pyproject.toml and of the
+# Once a month, opens pull requests for newer versions of the Python dependencies in pyproject.toml and of the
 # GitHub Actions used by the workflows (they are pinned to commit SHAs; Dependabot updates the SHA and its version
-# comment together). Nothing is merged automatically; every update goes through CI and a maintainer's review.
+# comment together). Minor and patch updates are grouped into one pull request per ecosystem.
+# Nothing is merged automatically; every update goes through CI and a maintainer's review.
 # Major version updates are not proposed automatically; they are planned and tested as part of a release.
 version: 2
 updates:
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     open-pull-requests-limit: 3
+    groups:
+      all-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     open-pull-requests-limit: 3
+    groups:
+      all-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]

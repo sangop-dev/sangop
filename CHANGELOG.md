@@ -10,6 +10,10 @@ every month or so; Sangop Pro, a separate add-on, follows the same numbering). P
   attribute that cannot be overwritten is now dropped instead of keeping its unscrubbed value (found by bandit).
 - **Dependabot:** removed the label settings (those labels do not exist in the repository) and stopped automatic
   major-version update pull requests; minor and patch updates continue.
+- **Dependabot:** runs once a month and groups all minor and patch updates into one pull request per ecosystem.
+- **README:** new "Stability and versioning" section (monthly releases, stable public API, deprecation policy).
+- Documentation, examples and the built-in self-test no longer show identifier-shaped sample values; they use masked forms, Sangop tokens or
+  UIDAI's published test UID.
 
 ## 2026.11.0 (2026-11-15) - first public release of the open core
 

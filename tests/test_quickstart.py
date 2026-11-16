@@ -41,11 +41,11 @@ def _call(mcp, name, args):
 def test_enforce_masks_everything_that_is_raw_without_sangop(tmp_path):
     off = tools.build_server("off")
     _, raw = _call(off, "lookup_customer", {"customer_id": 7})
-    aad = tools.fake_aadhaar(7)
-    assert aad in raw and "ABCPE1234F" in raw
+    aad, pan = tools.fake_aadhaar(7), tools.fake_pan(7)
+    assert aad in raw and pan in raw
     enf = tools.build_server("enforce", ledger_path=str(tmp_path / "a.db"))
     err, text = _call(enf, "lookup_customer", {"customer_id": 7})
-    assert not err and aad not in text and "ABCPE1234F" not in text and "9876500007" not in text
+    assert not err and aad not in text and pan not in text and "9876500007" not in text
     assert "[PII_AADHAAR_" in text and "[PII_PAN_" in text
     err, note = _call(enf, "read_note", {"note_id": 1})
     assert tools.FAKE_KEY not in note and "[PII_SECRET_GITHUB_" in note

@@ -25,6 +25,8 @@ from __future__ import annotations
 import collections.abc
 import functools
 import inspect
+import secrets as _secrets
+import string
 import time
 from collections import Counter
 from dataclasses import dataclass
@@ -44,7 +46,7 @@ class SangopBlocked(Exception):
 class SangopToolError(Exception):
     """Raised instead of the original exception when a guarded tool fails (audit finding H2).
 
-    Database and library errors often quote the offending row ("duplicate key ... (email)=(a@b.com)"). The text
+    Database and library errors often quote the offending row ("duplicate key ... (email)=(<the e-mail address>)"). The text
     here has been scrubbed with the guard's own PII mode and the original exception is NOT chained, so neither
     message nor traceback can carry the raw value to the model. The original exception type name is in
     ``error_type`` and in the audit ledger. In ``pii_mode="shadow"`` (observe only) the original exception is
@@ -136,13 +138,15 @@ def _log(event: str, record: dict) -> None:
 
 def selftest() -> dict:
     """Canary test: proves the filters are live. Uses synthetic values only."""
-    base = "23456789012"                      # synthetic, generated at runtime
-    canary_aadhaar = base + verhoeff_check_digit(base)
-    probe = f"canary {canary_aadhaar} ABCPE1234F"
+    canary_aadhaar = "999941057058"           # UIDAI's published test UID, not a person's number
+    az = string.ascii_uppercase               # PAN-shaped canary is made at run time, never written in the file
+    canary_pan = (_secrets.choice(az) + _secrets.choice(az) + _secrets.choice(az) + "P" + _secrets.choice(az)
+                  + str(_secrets.randbelow(9000) + 1000) + _secrets.choice(az))
+    probe = f"canary {canary_aadhaar} {canary_pan}"
     tmp = Vault()
     out, counts = scrub_text(probe, tmp, "tokenize")
     sql_blocked = not check_sql("DROP TABLE users").allowed
-    ok = (canary_aadhaar not in out) and ("ABCPE1234F" not in out) and sql_blocked
+    ok = (canary_aadhaar not in out) and (canary_pan not in out) and sql_blocked
     result = {"ok": ok, "pii_kinds": sorted(counts), "sql_drop_blocked": sql_blocked, "rules": rules_info()["name"]}
     _log("selftest", result)
     _STATE.selftest_done = True
