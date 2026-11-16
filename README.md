@@ -412,7 +412,7 @@ is blocked as row-folding; EXISTS, IN, ANY / ALL and a bracketed scalar sub-quer
 
 Sangop is maintained by Arvind Kumar, an independent developer in Raipur, India, who decides what it does and
 signs off every release. Development uses AI coding assistants under fixed rules: every change starts with a
-failing test; the full suite (about 2,100 tests) runs on Linux and Windows before a release; a separate AI-assisted
+failing test; the full suite (about 2,640 tests) runs on Linux and Windows before a release; a separate AI-assisted
 security review attacks each release candidate, and every fixed finding gets a regression test. None of this is a
 third-party audit; one is planned before any enterprise offering. You don't have to take our word for it: the code,
 the tests and the speed benchmark are all here. Run them, and try to break it ([SECURITY.md](SECURITY.md)).

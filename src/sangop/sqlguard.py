@@ -607,7 +607,7 @@ def _node_names(node: exp.Func) -> set:
     names = {_func_name(node), type(node).__name__.lower()}
     try:
         names |= {n.lower() for n in type(node).sql_names()}
-    except Exception:  # pragma: no cover - defensive
+    except Exception:  # nosec B110 # pragma: no cover - the written name and class name above are still checked
         pass
     return names
 
@@ -646,7 +646,7 @@ def _strip_builtin_schema(stmt: exp.Expression, dialect: Optional[str]) -> exp.E
             parsed = sqlglot.parse_one(f"{name}({args})", read=dialect)
             if isinstance(parsed, exp.Func):
                 node = parsed
-        except Exception:
+        except Exception:  # nosec B110 # keeps the plain unknown call, which every rule still reads by name
             pass
         for part in node.walk():                    # positions would point into another text
             for key in ("line", "col", "start", "end"):

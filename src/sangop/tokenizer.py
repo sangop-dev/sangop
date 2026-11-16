@@ -491,7 +491,7 @@ def _walk(obj: Any, vault: Vault, mode: str, kinds: Optional[tuple], counts: Cou
                     if hasattr(obj, name):
                         _set_attr(clone, name, rec(getattr(obj, name)))
                 return _verified(clone, obj, vault, mode, kinds, counts, before)
-            except Exception:
+            except Exception:  # nosec B110 # falls through to the fail-closed text-form check just below
                 pass
     # Unknown type: fail closed through its text forms. Clean objects (dates, UUIDs, ...) are returned unchanged.
     done = _verified(obj, obj, vault, mode, kinds, counts)

@@ -64,6 +64,7 @@ def test_clean_packages_pass(tmp_path):
 @pytest.mark.parametrize("private", [
     "scripts/private_checks.py", "scripts/private_strings.txt", "scripts/private_check_files.txt",
     "scripts/pro_markers.txt", "scripts/make_public_export.py", "docs/NOTES_HI.md",
+    "scripts/make_brain_snapshot.py", "CLAUDE.md", ".claude/settings.json",
     "bench/india_pii/holdout9_v0_1.jsonl", "bench/other.jsonl",
 ])
 def test_a_private_file_in_the_packages_fails_the_release(tmp_path, private):

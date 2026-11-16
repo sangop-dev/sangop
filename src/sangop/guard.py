@@ -342,7 +342,9 @@ def guard(
                 try:
                     setattr(exc, name, s(value))
                 except Exception:  # noqa: BLE001
-                    pass
+                    # a read-only attribute (or a value that cannot be scrubbed): drop the raw value, fail closed
+                    # (bandit B110, 16 Nov 2026: this `pass` used to leave the unscrubbed value in __dict__)
+                    exc.__dict__.pop(name, None)
             exc.__cause__ = None
             exc.__context__ = None
             exc.__suppress_context__ = True

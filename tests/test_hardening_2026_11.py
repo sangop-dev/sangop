@@ -229,6 +229,25 @@ def test_f7_exception_attributes_are_scrubbed_too():
     assert PAN not in str(info.value) and PAN not in info.value.detail
 
 
+def test_f7_an_attribute_that_cannot_be_set_is_dropped_not_kept_raw():
+    """bandit B110 (16 Nov 2026): a read-only attribute used to keep its unscrubbed value in __dict__."""
+    class HaltRO(BaseException):
+        @property
+        def detail(self):                       # no setter: setattr(exc, "detail", ...) raises
+            return "fixed"
+
+    @sangop.guard(purpose="t")
+    def tool() -> str:
+        e = HaltRO("halted")
+        e.__dict__["detail"] = f"PAN {PAN}"
+        raise e
+
+    with pytest.raises(HaltRO) as info:
+        tool()
+    assert "detail" not in info.value.__dict__
+    assert PAN not in repr(vars(info.value))
+
+
 # ---- F8: memoryview -----------------------------------------------------------------------------------------------
 
 def test_f8_memoryview_is_handled_like_bytes():

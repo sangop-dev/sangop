@@ -19,3 +19,5 @@ docs/*_HI.md
 private/
 *.sha256.bak
 *_PRIVATE.md
+.claude/settings.local.json
+CLAUDE.local.md

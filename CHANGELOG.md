@@ -3,7 +3,13 @@
 All notable changes to the open-core `sangop` package. Versions are dates: `YEAR.MONTH.PATCH` (a new release
 every month or so; Sangop Pro, a separate add-on, follows the same numbering). Pre-release (alpha).
 
-## 2026.11.0 (2026-11-14) - first public release of the open core
+## Unreleased
+
+- **CI hardening:** GitHub Actions pinned to full commit SHAs, checkout without stored credentials, minimal
+  per-job permissions, `pip-audit` and `bandit` in CI, Dependabot for pip and GitHub Actions. Also: an exception
+  attribute that cannot be overwritten is now dropped instead of keeping its unscrubbed value (found by bandit).
+
+## 2026.11.0 (2026-11-15) - first public release of the open core
 
 What the open core does today:
 
