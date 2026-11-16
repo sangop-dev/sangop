@@ -105,6 +105,13 @@ def test_dependabot_watches_pip_and_actions_weekly_with_a_small_pr_limit():
         assert 1 <= u["open-pull-requests-limit"] <= 5
 
 
+def test_dependabot_has_no_labels_and_ignores_major_versions():
+    assert DEPENDABOT is not None
+    for u in _load(DEPENDABOT)["updates"]:
+        assert "labels" not in u
+        assert {"dependency-name": "*", "update-types": ["version-update:semver-major"]} in u.get("ignore", [])
+
+
 EXPORT_SCRIPT = ROOT / "scripts" / "make_public_export.py"
 
 

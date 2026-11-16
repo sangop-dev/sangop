@@ -8,6 +8,8 @@ every month or so; Sangop Pro, a separate add-on, follows the same numbering). P
 - **CI hardening:** GitHub Actions pinned to full commit SHAs, checkout without stored credentials, minimal
   per-job permissions, `pip-audit` and `bandit` in CI, Dependabot for pip and GitHub Actions. Also: an exception
   attribute that cannot be overwritten is now dropped instead of keeping its unscrubbed value (found by bandit).
+- **Dependabot:** removed the label settings (those labels do not exist in the repository) and stopped automatic
+  major-version update pull requests; minor and patch updates continue.
 
 ## 2026.11.0 (2026-11-15) - first public release of the open core
 
