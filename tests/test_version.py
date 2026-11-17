@@ -21,9 +21,9 @@ def test_pyproject_and_package_versions_agree():
     assert _pyproject_version() == sangop.__version__
 
 
-def test_version_is_calver_2026_11_0():
-    """D-102 (5 Nov 2026): date-based versions, YYYY.MM.PATCH; the first public release is 2026.11.0."""
-    assert sangop.__version__ == "2026.11.0"
+def test_version_is_calver_2026_11_1():
+    """D-102 (5 Nov 2026): date-based versions, YYYY.MM.PATCH; the first public release was 2026.11.0, the second is 2026.11.1."""
+    assert sangop.__version__ == "2026.11.1"
     assert re.fullmatch(r"20\d\d\.(?:[1-9]|1[0-2])\.\d+", sangop.__version__)
 
 

@@ -5,6 +5,11 @@ every month or so; Sangop Pro, a separate add-on, follows the same numbering). P
 
 ## Unreleased
 
+## 2026.11.1 (2026-11-17)
+
+- **Tests:** the 20 MB timing test now takes the best of 3 runs and allows 1.5x room over its machine-calibrated budget
+  (shared CI runners vary by tens of percent; a real super-linear slowdown is many times slower and is still caught); a new
+  check shows the limit still rejects a quadratic function.
 - **CI hardening:** GitHub Actions pinned to full commit SHAs, checkout without stored credentials, minimal
   per-job permissions, `pip-audit` and `bandit` in CI, Dependabot for pip and GitHub Actions. Also: an exception
   attribute that cannot be overwritten is now dropped instead of keeping its unscrubbed value (found by bandit).

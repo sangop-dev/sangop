@@ -13,7 +13,7 @@ from .policy import PolicyError, PolicyPack, example_pack_path, load_pack
 from .sqlguard import SqlPolicy, SqlVerdict, check_sql
 from .tokenizer import Vault, detokenize_obj, detokenize_text, scrub_obj, scrub_text
 
-__version__ = "2026.11.0"
+__version__ = "2026.11.1"
 
 __all__ = [
     "AuditLedger", "Finding", "PolicyError", "PolicyPack", "SangopBlocked", "SangopToolError", "SqlPolicy", "SqlVerdict", "Vault",

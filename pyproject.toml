@@ -1,6 +1,6 @@
 [project]
 name = "sangop"
-version = "2026.11.0"
+version = "2026.11.1"
 description = "Local, deterministic PII/secret scrubbing, SQL guarding and tamper-evident audit logs for AI agent tools (MCP/FastMCP). No network, no telemetry."
 readme = "README.md"
 license = "Apache-2.0"

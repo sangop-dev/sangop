@@ -191,7 +191,10 @@ def test_decoys_are_not_media(text):
 
 DEV_REFERENCE_SECONDS = 0.062     # best of 7 runs of _reference_workload() on the development machine, 28 Oct 2026
 BUDGET_SECONDS = 2.0              # 20 MB budget on the development machine (measured worst case 1.7 s, 27 Oct 2026)
-MAX_GROWTH = 25.0                 # 2 MB -> 20 MB: linear is ~10x; a quadratic blow-up is ~100x
+# Shared CI runners and laptops vary by tens of percent; a real super-linear regression is many times slower, so
+# 1.5x of room does not let one through.
+TOLERANCE = 1.5
+MAX_GROWTH = 25.0                # 2 MB -> 20 MB: linear is ~10x; a quadratic blow-up is ~100x
 # Windows CI and laptops are much slower; the Linux limit stays the real gate.
 WINDOWS_FACTOR = 3 if sys.platform == "win32" else 1
 DOS_KINDS = ["text", "base64_not_media", "many_small_pieces", "media_inside_text"]
@@ -250,11 +253,38 @@ def _no_leak(kind, out):
 def test_20_mb_within_the_machine_calibrated_budget(kind):
     big = _big(kind, 20_000_000)
     before = _reference_median()
-    took, out = _best_time(big, repeat=2)
+    took, out = _best_time(big, repeat=3)            # best of 3: one slow run on a busy machine is not a regression
     factor = _machine_factor(before, _reference_median())
-    assert took < BUDGET_SECONDS * factor, (kind, round(took, 2), "budget", round(BUDGET_SECONDS * factor, 2),
-                                            "machine factor", round(factor, 2))
+    assert _within_budget(took, BUDGET_SECONDS, factor), (
+        kind, round(took, 2), "limit", round(BUDGET_SECONDS * factor * TOLERANCE, 2), "machine factor", round(factor, 2))
     _no_leak(kind, out)
+
+
+def _within_budget(took: float, budget: float, factor: float) -> bool:
+    return took < budget * factor * TOLERANCE
+
+
+def test_budget_gate_still_rejects_a_quadratic_function():
+    """The 1.5x room must not make the gate useless: with a small stand-in budget, a linear loop passes and the same
+    work done as an n**2 loop is rejected."""
+    n = 3000
+
+    def linear():
+        t = time.perf_counter()
+        sum(i ^ 1 for i in range(n))
+        return time.perf_counter() - t
+
+    def quadratic():
+        t = time.perf_counter()
+        sum(i ^ j for i in range(n) for j in range(n))
+        return time.perf_counter() - t
+
+    fast = min(linear() for _ in range(3))
+    slow = min(quadratic() for _ in range(3))
+    budget = max(fast * 20, 0.01)                    # generous for the linear loop, tiny for 9 million steps
+    assert _within_budget(fast, budget, 1.0)
+    assert not _within_budget(slow, budget, 1.0)
+    assert not _within_budget(BUDGET_SECONDS * TOLERANCE, BUDGET_SECONDS, 1.0)   # exactly at the limit fails: strict <
 
 
 @pytest.mark.parametrize("kind", DOS_KINDS)
