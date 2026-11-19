@@ -1,6 +1,6 @@
 """Pre-launch hardening (internal review 26 Oct and 5 Nov 2026: F3, F6, F7, F8, N2-enum, N2-pyd, Log-To-Leak).
 
-Written test-first, synthetic values only. No detector or detection pattern is changed by these fixes (D-034).
+Written test-first, synthetic values only. No detector or detection pattern is changed by these fixes.
 """
 import asyncio
 import enum

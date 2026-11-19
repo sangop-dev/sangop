@@ -1,4 +1,4 @@
-"""D-063: find_all must stay roughly linear on long text with very many findings (it was O(n^2): ~9 s for 20,000 phones)."""
+"""find_all must stay roughly linear on long text with very many findings (it was O(n^2): ~9 s for 20,000 phones)."""
 import sys
 import time
 

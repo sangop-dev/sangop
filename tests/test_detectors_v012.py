@@ -1,6 +1,6 @@
 """Regression tests for the four limits recorded after holdout 1 (fixed in Sangop 0.1.2). Synthetic values only.
 
-Sangop 0.1.3 (D-037) changed two of the 0.1.2 behaviours on purpose; those tests are updated below and the
+Sangop 0.1.3 changed two of the 0.1.2 behaviours on purpose; those tests are updated below and the
 new behaviour is tested in test_detectors_v013.py."""
 import pytest
 

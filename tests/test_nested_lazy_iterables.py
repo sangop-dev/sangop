@@ -1,4 +1,4 @@
-"""Internal review (26 Oct 2026), F1 (CRITICAL, D-075): a lazy iterable NESTED inside a tool result (a generator, map, zip, iter, chain or
+"""Internal review (26 Oct 2026), F1 (CRITICAL): a lazy iterable NESTED inside a tool result (a generator, map, zip, iter, chain or
 filter object inside a dict or list) was returned untouched, and the MCP framework's serializer then consumed it and
 sent the raw values to the client. Only a top-level iterator was scrubbed (H3).
 

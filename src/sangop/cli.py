@@ -117,7 +117,7 @@ KEYGEN_NOTE = ("Keep this key in a password manager. Never put it in git, chat o
 
 
 def cmd_keygen(_: argparse.Namespace) -> int:
-    """Print one random 32-byte key (64 hex characters) on stdout. Nothing is written to any file (D-071)."""
+    """Print one random 32-byte key (64 hex characters) on stdout. Nothing is written to any file."""
     print(secrets.token_hex(32))
     print(KEYGEN_NOTE, file=sys.stderr)
     return 0

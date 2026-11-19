@@ -5,6 +5,8 @@ every month or so; Sangop Pro, a separate add-on, follows the same numbering). P
 
 ## Unreleased
 
+- README: the CI line now matches the test matrix; maintainer wording.
+
 ## 2026.11.1 (2026-11-17)
 
 - **Tests:** the 20 MB timing test now takes the best of 3 runs and allows 1.5x room over its machine-calibrated budget

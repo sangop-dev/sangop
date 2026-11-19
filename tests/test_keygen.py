@@ -1,4 +1,4 @@
-"""`sangop keygen` (D-071): prints one random 32-byte ledger key as 64 hex characters on stdout and NOTHING else there;
+"""`sangop keygen`: prints one random 32-byte ledger key as 64 hex characters on stdout and NOTHING else there;
 a short safety note goes to stderr. It never writes a file, never touches the network, and the key it prints passes
 the weak-key check. Written before the command existed (written test-first)."""
 import builtins

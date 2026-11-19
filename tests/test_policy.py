@@ -151,7 +151,7 @@ def test_shipped_dpdp_pack_loads_and_is_honest():
     assert pack.purpose.allowed_kinds("not-a-purpose") == frozenset()
 
 
-# ---- the open example pack that ships inside the package (D-032) ----------------------------------
+# ---- the open example pack that ships inside the package ----------------------------------
 
 def test_shipped_example_pack_loads_and_is_clearly_an_example():
     pack = load_pack(sangop.example_pack_path())

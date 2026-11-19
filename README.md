@@ -16,8 +16,8 @@ evidence.**
 pip install sangop             # "sangop[fastmcp]" for the FastMCP integration
 ```
 
-**Tested on:** Linux with Python 3.10, 3.11, 3.12 and 3.13, and Windows 10 with Python 3.12 (the maintainer's
-laptop). Windows is not in automated CI yet; the CI workflow runs Linux and Windows once the repository is public.
+**Tested on:** Linux and Windows with Python 3.10, 3.11, 3.12 and 3.13 in CI on every push, and on the maintainer's
+Windows laptop before each release.
 
 ## Before and after
 
@@ -167,7 +167,7 @@ What happens on each call:
    itself, is replaced in the result by its scrubbed value (or a scrubbed dict of its attributes). A pydantic model
    is also checked in its JSON form (`model_dump(mode="json")`), so a custom serializer cannot put a value the
    fields do not show into the output.
-3. **Recognised media is not let through silently, by default (D-078)** - images, PDFs, Office files, archives and audio are **not
+3. **Recognised media is not let through silently, by default** - images, PDFs, Office files, archives and audio are **not
    read** by Sangop (no OCR). They are recognised by their first bytes (PNG, JPEG, GIF, WebP, BMP, TIFF, HEIC/HEIF,
    AVIF, PDF, ZIP/Office, OLE, WAV, Ogg, FLAC, MP3, MP4; a PDF also when `%PDF-` comes after a BOM or junk within
    its first 1024 bytes) as raw `bytes`/`bytearray`/`memoryview`, as a `data:...;base64,...` URI anywhere inside a
@@ -228,7 +228,7 @@ can no longer be verified with a new key.
 | `check_sql` one query | ~0.3-0.5 ms | ~1.2 ms |
 | full guard, 20-row result with ~80 PII values, with ledger | ~2.5 ms | ~5.4 ms |
 
-**Long texts (D-063, same machine, indicative).** `find_all` used to compare every candidate with every kept finding,
+**Long texts (same machine, indicative).** `find_all` used to compare every candidate with every kept finding,
 which is quadratic: a 260 KB text with 20,000 phone numbers took about 9.3 s (a 280 KB text with grouped numbers about
 9.6 s). It now takes about 0.2 s for either (the kept findings are kept sorted and only the two neighbours are
 checked). Results are identical to the old code on all 14,400 benchmark rows. Ordinary short texts are unchanged. A
@@ -411,7 +411,7 @@ is blocked as row-folding; EXISTS, IN, ANY / ALL and a bracketed scalar sub-quer
 
 ### Who maintains it, and how
 
-Sangop is maintained by Arvind Kumar, an independent developer in Raipur, India, who decides what it does and
+Sangop is built and maintained by Arvind Kumar, an independent founder in Raipur, India, who decides what it does and
 signs off every release. Development uses AI coding assistants under fixed rules: every change starts with a
 failing test; the full suite (about 2,670 tests) runs on Linux and Windows before a release; a separate AI-assisted
 security review attacks each release candidate, and every fixed finding gets a regression test. None of this is a

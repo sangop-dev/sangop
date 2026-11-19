@@ -126,8 +126,8 @@ def test_uses_git_view_when_available(tmp_path):
 
 
 def test_real_repo_passes_its_own_check():
-    """The way the script is really run: in the private repository it checks the public export built from it
-    (D-094); in a public checkout it checks the checkout itself."""
+    """The way the script is really run: in the private repository it checks the public export built from it;
+    in a public checkout it checks the checkout itself."""
     root = SCRIPT.parent.parent
     assert pc.main(["--root", str(root), "--skip-private-checks"]) == 0     # the maintainers' extra checks run tests
 
@@ -168,7 +168,7 @@ def test_no_extra_check_file_changes_nothing(tmp_path):
     assert pc.main(["--root", str(make(tmp_path))]) == 0
 
 
-# ---- Pro rules and the private benchmark must never reach a public export (D-093/D-094, 5 Nov 2026) ----
+# ---- Pro rules and the private benchmark must never reach a public export (5 Nov 2026) ----
 
 def test_pro_rule_marker_in_a_public_file_fails(tmp_path):
     root = make(tmp_path, {"src/sangop/extra.py": "RULE = _PRIVATE_TUNED_RULE_X\n"})
@@ -189,12 +189,12 @@ def test_clean_tree_passes_the_pro_check(tmp_path):
 
 
 def test_published_sha256_of_private_sets_are_allowed(tmp_path):
-    """D-100: the sha256 of every private set is public (it proves the sets were not changed later)."""
+    """The sha256 of every private set is public (it proves the sets were not changed later)."""
     res = pc.run_checks(make(tmp_path, {"bench/india_pii/holdout9_v0_1.sha256": "ab  holdout9_v0_1.jsonl\n"}), markers=[])
     assert status(res, "Pro rules / private benchmark") == "PASS"
 
 
-# ---- the honesty rule on every public sentence, also for Sangop Pro (D-103, 5 Nov 2026) ----
+# ---- the honesty rule on every public sentence, also for Sangop Pro (5 Nov 2026) ----
 
 @pytest.mark.parametrize("line", [
     "Sangop Pro catches everything.", "It stops all leaks.", "Hack-proof by design.", "The only tool you need.",

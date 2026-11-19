@@ -1,4 +1,4 @@
-"""Media M0 (D-078): "No media leaves silently."
+"""Media M0: "No media leaves silently."
 
 Before M0, an MCP ImageContent / AudioContent / EmbeddedResource(blob), a ``data:image/...;base64,...`` URI or a long
 base64 image string left a guarded tool unchanged (``pii_found: {}``), and raw PNG/JPEG bytes were decoded as text,

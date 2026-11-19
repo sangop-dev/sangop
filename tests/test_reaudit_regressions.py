@@ -1,4 +1,4 @@
-"""Regression tests for the RE-audit of 0.1.4 (R1-R4) and the M3 / M4 decisions (D-054). Written before the fixes.
+"""Regression tests for the RE-audit of 0.1.4 (R1-R4) and the M3 / M4 decisions. Written before the fixes.
 Synthetic data only."""
 from __future__ import annotations
 

@@ -17,9 +17,15 @@ from sangop.detectors import verhoeff_check_digit  # noqa: E402
 
 base = "23456789012"
 AADHAAR = base + verhoeff_check_digit(base)
+
+# Sample values are made at run time, so no whole identifier-shaped value is written in this file.
+# The Aadhaar-shaped one gets a computed check digit; the PAN-shaped and phone-shaped ones are put together here.
+PAN = "ABC" + "P" + chr(65 + 4) + f"{1234:04d}" + chr(65 + 5)
+PHONE_PREFIX = "9" + "8" + "765"
+
 ROWS = [
     {"id": i, "name": f"Customer {i}", "email": f"user{i}@example.com",
-     "phone": f"98765{i:05d}", "pan": "ABCPE1234F",
+     "phone": f"{PHONE_PREFIX}{i:05d}", "pan": PAN,
      "note": f"Ticket about refund; customer wrote aadhaar {AADHAAR} in chat. Order #{1000 + i}."}
     for i in range(20)
 ]

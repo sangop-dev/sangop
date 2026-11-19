@@ -3,6 +3,7 @@ no full PAN, Indian mobile, checksum-valid Aadhaar or Luhn-valid card number. Sh
 characters, X in between), a Sangop token, or words instead (TASK-041). The one allowed exception is UIDAI's own
 published test UID. This test contains no identifier-shaped value itself.
 """
+import importlib.util
 import re
 import unicodedata
 from pathlib import Path
@@ -50,6 +51,23 @@ def _public_files() -> list:
     files +=[p for p in sorted((ROOT / "examples").rglob("*"))
               if p.is_file() and p.suffix in {".py", ".md", ".json", ".txt", ".yaml", ".yml"}]
     files += sorted((ROOT / "src" / "sangop").rglob("*.py"))
+    files += _bench_files()
+    return files
+
+
+def _bench_files() -> list:
+    """The text files of bench/ that are published (TASK-045). In the private repository the private benchmark sets
+    sit in the same folder, so only the files of the export plan are read there; in the export, every text file."""
+    script = ROOT / "scripts" / "make_public_export.py"
+    if script.is_file():
+        spec = importlib.util.spec_from_file_location("_export_plan_for_bench", script)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        out = [ROOT / src for src, dst in mod.plan(ROOT) if dst.startswith("bench/")]
+    else:
+        out = list((ROOT / "bench").rglob("*"))
+    files = sorted(p for p in out if p.is_file() and p.suffix in {".py", ".md", ".json", ".txt", ".yaml", ".yml"})
+    assert any(p.name == "bench.py" for p in files), "bench/bench.py not found"
     return files
 
 
@@ -61,7 +79,7 @@ def _normalise(text: str) -> str:
 
 
 def _found(text: str) -> list:
-    text = _normalise(text)
+    text = re.sub(r"(?<![0-9A-Fa-f])[0-9a-f]{64}(?![0-9A-Fa-f])", " ", _normalise(text))   # a sha256 is not an identifier
     hits = [("PAN", m.group(0)) for m in _PAN.finditer(text.upper())]
     hits += [("MOBILE", m.group(0)) for m in _MOBILE.finditer(text)]
     for m in _TWELVE.finditer(text):
@@ -84,6 +102,7 @@ def test_the_checker_finds_what_it_should():
     kinds = sorted({k for k, _ in _found(sample)})
     assert kinds == ["AADHAAR", "CARD", "MOBILE", "PAN"]
     assert _found("masked: 98XXXXXX10 ABXXXXXX4F 99XXXXXXXX58 " + UIDAI_TEST_UID) == []
+    assert _found("sha256 " + "ab" + "6713407631" + "c" * 52) == []                  # a hash with a digit run inside
 
 
 def test_public_docs_and_examples_show_no_identifier_shaped_value():

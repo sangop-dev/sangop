@@ -1,6 +1,6 @@
 """Internal AI-assisted security review, 15 Nov 2026 ("review 4"): H1-H3, M1, M2, L1-L3. Written before the fixes;
 every query is synthetic. H1-H3 and M2 were confirmed by the reviewer on a throw-away local PostgreSQL 16 (own
-sandbox only). With the default allow-list (D-119) most of these are refused because their names are unknown; the
+sandbox only). With the default allow-list most of these are refused because their names are unknown; the
 tests also check the backstop, so the same names stay refused when a user allows them."""
 import pytest
 

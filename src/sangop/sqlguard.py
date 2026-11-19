@@ -98,7 +98,7 @@ DEFAULT_DENIED_TABLES = frozenset({
     "pg_settings", "pg_file_settings", "pg_hba_file_rules", "pg_ident_file_mappings", "pg_shadow", "pg_authid",
     "pg_user_mappings", "pg_stat_activity",
     "user_mapping_options",                           # shows foreign-server passwords (internal review 2, 14 Nov 2026, M3)
-    "pg_stat_statements", "pg_stat_statements_info",  # other sessions' query texts (14 Nov 2026, D-115)
+    "pg_stat_statements", "pg_stat_statements_info",  # other sessions' query texts (14 Nov 2026)
     # MySQL / SQL Server views with other sessions' SQL text or credentials (review 3, 14 Nov 2026, M3).
     # "user" only as mysql.user: a bare "user" is a common application table name.
     "processlist", "events_statements_current", "events_statements_history", "events_statements_history_long",
@@ -106,7 +106,7 @@ DEFAULT_DENIED_TABLES = frozenset({
     "dm_exec_sessions",
 })
 
-# Whole-family rules (14 Nov 2026, D-115). In PostgreSQL (and the generic reading, dialect=None) every function whose
+# Whole-family rules (14 Nov 2026). In PostgreSQL (and the generic reading, dialect=None) every function whose
 # name starts with pg_, lo_, txid_ or dblink, and every table whose name starts with pg_, is denied - except the
 # harmless ones named here. In SQLite (and dialect=None) the same holds for sqlite_*. New system functions are
 # therefore blocked by default instead of waiting for someone to list them.
@@ -208,7 +208,7 @@ def _plain_fraction(arg: exp.Expression) -> bool:
 
 
 # Common string / date functions that never run a text argument as a query: plain text in their arguments is not
-# refused by the text-query rule (14 Nov 2026, D-117). Matched by the name as written (unknown functions) and by the
+# refused by the text-query rule (14 Nov 2026). Matched by the name as written (unknown functions) and by the
 # node sqlglot builds for it (it turns many of them into typed nodes: ifnull/nvl -> Coalesce, instr -> StrPosition).
 # A function nested inside one of these is still checked on its own.
 SAFE_TEXT_ARG_FUNCTIONS = frozenset({
@@ -234,7 +234,7 @@ _SAFE_TEXT_ARG_CLASSES = frozenset({
     "regexpcount", "regexpinstr", "regexpsubstr", "regexpextract", "tonumber", "format", "numbertostr",
     "array", "jsonobject",
 })
-# String nodes whose text is checked (D-117 follow-ups): quoted literals, and every other string-literal node sqlglot
+# String nodes whose text is checked (follow-ups): quoted literals, and every other string-literal node sqlglot
 # has - RawString (PostgreSQL / DuckDB $$...$$, $tag$...$tag$), ByteString (E'...'), National (N'...'),
 # UnicodeString (U&'...'), HexString (X'...'), BitString (B'...') and any future non-function class whose name ends
 # in "String" - also behind CAST, TRY_CAST, :: or brackets. Hex and bit strings are decoded before the check.
@@ -275,7 +275,7 @@ def _keeps_plain_text(node: exp.Func) -> bool:
 def _sql_text_arguments(stmt: exp.Expression) -> list:
     """Names of functions (table-functions and unknown functions included) that get SQL text as a string argument.
     Several database functions run such text as a query (crosstab, query_to_xml, ts_stat, dblink, DuckDB query,
-    json_serialize_sql, ...); new ones appear with new versions, so the shape is refused, fail-closed (D-117).
+    json_serialize_sql, ...); new ones appear with new versions, so the shape is refused, fail-closed.
     CAST / TRY_CAST are skipped: they convert a value and never run it (text behind one, passed on to another
     function, is still checked)."""
     found = []
@@ -350,7 +350,7 @@ MAX_SQL_BYTES = 100 * 1024
 # following space is blocked for dialect=None and "mysql" (also used for MariaDB; founder's decision, 14 Nov 2026);
 # a nested comment for dialect=None.
 _DASH_DASH_NO_SPACE = re.compile(r"--(?=\S)")
-# A string argument that reads as SQL: a statement keyword as a whole word, then more text (D-117)
+# A string argument that reads as SQL: a statement keyword as a whole word, then more text
 # The keyword may be followed by whitespace and more text, or directly by * ( " ` [ (review 4, M1: 'SELECT*FROM t',
 # 'SELECT(email)FROM t'); a single word ('from', 'select') or a longer word ('selected', 'showcase') is plain text.
 _SQL_TEXT_ARGUMENT = re.compile(
@@ -466,7 +466,7 @@ def _family_denied_functions(funcs: set, dialect: Optional[str]) -> set:
 
     DuckDB: any name starting with ``read_`` or ending in ``_scan`` reads files or other databases (review 2, H7).
     PostgreSQL: pg_* / lo_* / txid_* / dblink* except PG_HARMLESS_FUNCTIONS. SQLite: sqlite_* except
-    SQLITE_HARMLESS_FUNCTIONS (D-115)."""
+    SQLITE_HARMLESS_FUNCTIONS."""
     d = (dialect or "").lower()
     found = set()
     if d in ("", "duckdb"):
@@ -484,7 +484,7 @@ def _family_denied_functions(funcs: set, dialect: Optional[str]) -> set:
 
 
 def _family_denied_tables(refs: list, dialect: Optional[str]) -> set:
-    """pg_* tables (PostgreSQL) and sqlite_* tables (SQLite) are denied except the schema tables named above (D-115)."""
+    """pg_* tables (PostgreSQL) and sqlite_* tables (SQLite) are denied except the schema tables named above."""
     d = (dialect or "").lower()
     found = set()
     for ref in refs:
@@ -499,7 +499,7 @@ def _family_denied_tables(refs: list, dialect: Optional[str]) -> set:
     return found
 
 
-# ---- Default function allow-list (15 Nov 2026, D-119) --------------------------------------------------------------------
+# ---- Default function allow-list (15 Nov 2026) --------------------------------------------------------------------
 # PostgreSQL-like dialects, SQLite and dialect=None: a function that is not on this list is refused. A deny-list kept
 # losing to new names (every security review found new ones), so the default is now "known safe names only"; add your
 # own with SqlPolicy(extra_allowed_functions=...). The deny-list, the family rules, the row-folding rules, the

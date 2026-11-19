@@ -87,7 +87,7 @@ def configure(
     ledger_key (or the SANGOP_LEDGER_KEY environment variable, >= 16 characters, stored OUTSIDE the ledger) makes the
     ledger an HMAC chain; without it the chain is unkeyed and ``verify`` says so.
 
-    media_mode (D-078) is the default for every ``@guard`` that does not set its own: ``"block"`` (default) replaces
+    media_mode is the default for every ``@guard`` that does not set its own: ``"block"`` (default) replaces
     images, PDFs, Office files, archives and audio in a tool result with ``[SANGOP_BLOCKED: media <kind> not
     scanned]`` and writes ``media_blocked``; ``"allow"`` passes them on UNSCANNED and writes ``media_unscanned``
     (Sangop does not read the content of media). Choosing "allow" is written to the ledger (``media_allow_default``).
@@ -171,11 +171,11 @@ def guard(
     pii_mode : "tokenize" (reversible, default) | "redact" | "shadow" (log only)
     sql_mode : "enforce" (block, default) | "shadow" (log only)
     detokenize_params : names of arguments whose tokens get their real value back inside this trusted tool.
-    detokenize_kinds : REQUIRED with ``detokenize_params`` (D-054): the token kinds that may be revealed, e.g.
+    detokenize_kinds : REQUIRED with ``detokenize_params``: the token kinds that may be revealed, e.g.
         ``("PHONE_IN",)``; other tokens stay tokens. ``"*"`` reveals every kind and is marked in the ledger.
         Every reveal writes a ``detokenize`` event (counts by kind, never the values).
     media_mode : "block" | "allow" | None (default: the ``configure(media_mode=...)`` value, itself "block").
-        Media (images, PDFs, Office files, archives, audio) is never scanned for personal data (D-078). "block"
+        Media (images, PDFs, Office files, archives, audio) is never scanned for personal data. "block"
         replaces it and writes ``media_blocked``; "allow" passes it unchanged and writes ``media_unscanned``.
     """
     if media_mode is not None and media_mode not in MEDIA_MODES:
@@ -306,14 +306,14 @@ def guard(
                                     media_mode=mm, _media_events=media_events, _media_key=key)
             counts.update(c)
             for ev in media_events:
-                # D-078: one event per media item; kind, MIME types, size, never the content
+                # one event per media item; kind, MIME types, size, never the content
                 name = ev.pop("event")
                 field = "media_blocked" if name == "media_blocked" else "media_unscanned"
                 if record is not None:
                     record[field] = record.get(field, 0) + 1
                 _log(name, {"tool": tool, "purpose": purpose, "pii_mode": pii_mode, "media_mode": mm, **ev})
             if record is not None:
-                # F1 (D-075): nested lazy iterables are read and scrubbed; blocked ones are logged, never their values
+                # F1: nested lazy iterables are read and scrubbed; blocked ones are logged, never their values
                 if stats.get("lazy_iterables_read"):
                     record["lazy_iterables_read"] = record.get("lazy_iterables_read", 0) + stats["lazy_iterables_read"]
                 if events:

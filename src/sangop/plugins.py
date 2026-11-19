@@ -1,4 +1,4 @@
-"""Rules plugins: how an installed package adds or replaces detection rules (D-093).
+"""Rules plugins: how an installed package adds or replaces detection rules.
 
 The open core ships a basic rule set (``sangop.detectors.BASIC_DETECTORS``). A separately installed package can
 provide another rule set through the entry-point group ``sangop.plugins``::

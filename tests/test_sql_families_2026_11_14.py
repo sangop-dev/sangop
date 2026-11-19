@@ -1,4 +1,4 @@
-"""Whole-family rules for the SQL guard (14 Nov 2026, D-115): new PostgreSQL and SQLite system functions and tables are
+"""Whole-family rules for the SQL guard (14 Nov 2026): new PostgreSQL and SQLite system functions and tables are
 blocked by default instead of waiting for someone to list them. Written before the rules; synthetic queries only."""
 import pytest
 

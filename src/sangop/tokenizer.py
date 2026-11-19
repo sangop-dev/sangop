@@ -113,7 +113,7 @@ def scrub_text(
 _MAX_DEPTH = 40
 _SCALAR_NO_PII = (bool, type(None), complex)
 
-# Internal review (26 Oct 2026), F1 (D-075): a lazy iterable nested inside a result (generator, map, zip, filter, iter, chain, ...) is
+# Internal review (26 Oct 2026), F1: a lazy iterable nested inside a result (generator, map, zip, filter, iter, chain, ...) is
 # read into a list - at most this many items - and scrubbed like a list. A longer one, an async iterable (it cannot
 # be read here) or one that raises is replaced by a placeholder (fail closed) and reported as an event.
 MAX_LAZY_ITEMS = 10_000
@@ -129,7 +129,7 @@ class _Ctx:
         self.events: list = []          # one dict per blocked nested iterable (no values, only reason/type/counts)
         self.lazy_read = 0              # nested lazy iterables read and scrubbed
         self.shadow_rebuilt = False     # shadow mode had to read an iterator, so the original object is now spent
-        self.media_mode = media_mode    # D-078: "block" (default) or "allow"
+        self.media_mode = media_mode    # "block" (default) or "allow"
         self.media_events: list = []    # one dict per media item seen (never its content)
         self.media_key = media_key      # ledger key: if set, events carry an HMAC fingerprint of the media
 
@@ -140,7 +140,7 @@ def _media_placeholder(kind: str) -> str:
 
 def _media_decision(ctx: _Ctx, mode: str, *, kind: str, sniffed_mime: Optional[str], claimed_mime: Optional[str],
                     size: Optional[int], raw: Optional[bytes], reason: Optional[str] = None) -> bool:
-    """Record one media item and return True when it must be replaced (D-078).
+    """Record one media item and return True when it must be replaced.
 
     block mode, or any decoding/sniffing error (fail closed, even in allow mode) -> replaced, ``media_blocked``.
     allow mode -> passed unchanged, ``media_unscanned``. pii_mode="shadow" -> never replaced; the event says what
@@ -359,7 +359,7 @@ def _set_attr(target: Any, name: str, value: Any) -> None:
 def _walk(obj: Any, vault: Vault, mode: str, kinds: Optional[tuple], counts: Counter, depth: int, seen: set,
           ctx: _Ctx) -> Any:
     if isinstance(obj, str):
-        found = _media_str(obj, vault, mode, kinds, counts, ctx)          # D-078: before any text scan
+        found = _media_str(obj, vault, mode, kinds, counts, ctx)          # before any text scan
         if found is not _NOT_MEDIA:
             return found
         new, c = scrub_text(obj, vault, mode, kinds)
@@ -387,7 +387,7 @@ def _walk(obj: Any, vault: Vault, mode: str, kinds: Optional[tuple], counts: Cou
         return _walk(v, vault, mode, kinds, counts, depth + 1, seen, ctx)
 
     if isinstance(obj, (bytes, bytearray, memoryview)):
-        found = _media_bytes(obj, mode, ctx)                               # D-078: media is never text-decoded
+        found = _media_bytes(obj, mode, ctx)                               # media is never text-decoded
         if found is not _NOT_MEDIA:
             return found
     found = _media_mcp(obj, mode, ctx)
@@ -600,7 +600,7 @@ def scrub_obj(
     ``MAX_LAZY_ITEMS`` items; longer, async or failing ones become a ``[SANGOP_BLOCKED: ...]`` placeholder and an
     entry in ``_events``). Any other type is checked through ``str(obj)`` (fail-closed).
 
-    Media (D-078, see ``sangop.media``): images, PDFs, Office files, archives and audio are recognised by magic bytes
+    Media (see ``sangop.media``): images, PDFs, Office files, archives and audio are recognised by magic bytes
     (raw bytes, ``data:`` URIs, long base64 strings, MCP Image/Audio/EmbeddedResource blobs) and are NEVER text-scanned.
     ``media_mode="block"`` (default) replaces each with ``[SANGOP_BLOCKED: media <kind> not scanned]`` (an MCP content
     block becomes a TextContent); ``"allow"`` returns it unchanged. A decoding or sniffing error always blocks. One

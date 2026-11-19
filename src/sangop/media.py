@@ -1,4 +1,4 @@
-"""Media recognition for Media M0 (D-078): "No media leaves silently."
+"""Media recognition for Media M0: "No media leaves silently."
 
 Sangop does not read images, PDFs, Office files or audio (no OCR, no parsing). This module only RECOGNISES them, so
 that the guard can block them (default) or pass them on with an audit event, instead of letting them through

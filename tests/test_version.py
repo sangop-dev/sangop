@@ -22,7 +22,7 @@ def test_pyproject_and_package_versions_agree():
 
 
 def test_version_is_calver_2026_11_1():
-    """D-102 (5 Nov 2026): date-based versions, YYYY.MM.PATCH; the first public release was 2026.11.0, the second is 2026.11.1."""
+    """Date-based versions (5 Nov 2026), YYYY.MM.PATCH; the first public release was 2026.11.0, the second is 2026.11.1."""
     assert sangop.__version__ == "2026.11.1"
     assert re.fullmatch(r"20\d\d\.(?:[1-9]|1[0-2])\.\d+", sangop.__version__)
 
@@ -58,6 +58,6 @@ def test_readme_never_suggests_pro_can_be_obtained_today():
 
 
 def test_notice_names_the_owner_in_full():
-    """One owner name everywhere, the same as on trademark application 8094683 (D-106, 5 Nov 2026)."""
+    """One owner name everywhere, the same as on trademark application 8094683 (5 Nov 2026)."""
     text = (ROOT / "NOTICE").read_text(encoding="utf-8")
     assert "Copyright 2026 Arvind Kumar" in text

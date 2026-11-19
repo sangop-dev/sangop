@@ -1,4 +1,4 @@
-"""Family rule (14 Nov 2026, D-117): a function argument that is SQL text ('SELECT ...') is refused in every dialect,
+"""Family rule (14 Nov 2026): a function argument that is SQL text ('SELECT ...') is refused in every dialect,
 because several database functions run such text as a query (crosstab, query_to_xml, ts_stat, dblink, DuckDB query,
 json_serialize_sql, and whatever a future version adds). Fail-closed; every query is synthetic."""
 import pytest
@@ -212,7 +212,7 @@ def test_followup3_string_like_nodes_are_refused_with_dialect_none(sql):
     "SELECT array_to_string(ARRAY['a', 'b'], ',') LIMIT 1",
 ])
 def test_followup3_ordinary_string_forms_stay_allowed(sql):
-    # unknownfn is named so that the default allow-list (15 Nov 2026, D-119) does not refuse it; the text rule is tested
+    # unknownfn is named so that the default allow-list (15 Nov 2026) does not refuse it; the text rule is tested
     v = check_sql(sql, SqlPolicy(dialect="postgres", extra_allowed_functions=frozenset({"unknownfn"})))
     assert v.allowed is True, v.reason
 

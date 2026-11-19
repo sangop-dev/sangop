@@ -1,4 +1,4 @@
-"""Open core and the rules-plugin hook (D-093).
+"""Open core and the rules-plugin hook.
 
 Written before the split (failing first): the open core runs a basic rule set (ASCII digits only) when no rules
 plugin is installed, reports which rule set is active, rejects plugin options it does not know, and fails closed

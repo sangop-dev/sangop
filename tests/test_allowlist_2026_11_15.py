@@ -1,4 +1,4 @@
-"""Default function allow-list for PostgreSQL-like dialects, SQLite and dialect=None (15 Nov 2026, D-119), and the
+"""Default function allow-list for PostgreSQL-like dialects, SQLite and dialect=None (15 Nov 2026), and the
 large false-positive list that must stay allowed. Every query is synthetic.
 
 The deny-list approach kept losing to new names (a new review found new ones each time), so for these dialects a
